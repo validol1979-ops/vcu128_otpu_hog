@@ -34,15 +34,43 @@ Apache-2.0) на отладочной плате AMD VCU128 (xcvu37p-fsvh2892-2L
     ./Hog/Do WORKFLOW -njobs 4 otpu        # ~2 ч, результат в bin/
 
 Сабмодуль `Hog/` — публичный Hog2026.2-6 (`db7af4f`, gitlab.com/hog-cern/Hog).
+Для сборки FPGA больше ничего не нужно: RTL openTPU и библиотек скопированы в
+`vcu128_otpu/src/`.
+
+## Окружение ПК-стороны и регрессий
+
+Чат, API, `tools/` и регрессии ищут upstream openTPU и окружения Python рядом
+с репозиторием, в `../external/`. Подготовить (git, python3.13; ~2 ГБ, torch CPU):
+
+    env/setup_external.sh            # --no-rtl — без окружения cocotb
+
+Скрипт скачивает [FeSens/openTPU](https://github.com/FeSens/openTPU) на коммите
+`f237dab` в `../external/rtl/opentpu-fesens/upstream` и ставит версии из
+`env/requirements-pc.txt` (`../external/rtl/opentpu-fesens/.venv`) и
+`env/requirements-rtl.txt` (`../external/rtl/opentpu/.venv`). Для RTL-регрессий
+дополнительно нужен Verilator 5.050 в `PATH` или `~/.local/bin`.
+
+Проверка без платы (нужно 16 passed; 14 passed + 2 skipped — upstream не найден):
+
+    cd vcu128_otpu/tools
+    PYTHONPATH=../../../external/rtl/opentpu-fesens/upstream \
+        ../../../external/rtl/opentpu-fesens/.venv/bin/python -m pytest -q test_otpu_eth.py
+
+RTL: `vcu128_otpu/sim/hbm/run.sh` (25 тестов), `vcu128_otpu/sim/eth40/run.sh`
+(2×10 тестов).
+
+Модели скачать в `upstream/models/` (открытые, токен HF не нужен):
+
+    cd ../external/rtl/opentpu-fesens/upstream
+    ../.venv/bin/hf download Qwen/Qwen3.5-2B      --local-dir models/Qwen3.5-2B
+    ../.venv/bin/hf download LiquidAI/LFM2.5-230M --local-dir models/LFM2.5-230M
 
 ## Запуск модели на плате
 
 Нужны: прошитая плата, линк 40G (на ПК порт с адресом 192.168.41.1/24 и
-`ethtool -s <порт> speed 40000 autoneg off`), upstream openTPU с окружением
-(`external/rtl/opentpu-fesens` общей рабочей области: `upstream/` и `.venv`) и
-скачанная модель в `upstream/models/`.
+`ethtool -s <порт> speed 40000 autoneg off`), окружение и модель (раздел выше).
 
-    cd <xilinx>/external/rtl/opentpu-fesens/upstream
+    cd <repo>/../external/rtl/opentpu-fesens/upstream
     export OTPU_TARGET=<repo>/vcu128_otpu/target/vcu128.toml
     export PYTHONPATH=.:<repo>/vcu128_otpu/tools
     ../.venv/bin/python <repo>/vcu128_otpu/tools/otpu_chat_eth.py \
