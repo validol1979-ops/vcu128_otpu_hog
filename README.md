@@ -33,7 +33,17 @@ Apache-2.0) на отладочной плате AMD VCU128 (xcvu37p-fsvh2892-2L
     ./Hog/Do CREATE otpu
     ./Hog/Do WORKFLOW -njobs 4 otpu        # ~2 ч, результат в bin/
 
-Сабмодуль `Hog/` — публичный Hog2026.2-6 (`db7af4f`, gitlab.com/hog-cern/Hog).
+Сабмодуль `Hog/` — публичный Hog2026.2-6 (`db7af4f`, gitlab.com/hog-cern/Hog,
+Apache-2.0); скачивается при клонировании, учётная запись не нужна. Если `Hog/`
+пустой (клон без `--recurse-submodules`):
+
+    git submodule update --init
+
+Если gitlab.com недоступен — официальное зеркало на GitHub (тот же коммит):
+
+    git config submodule.Hog.url https://github.com/hog-cern/Hog.git
+    git submodule update --init
+
 Для сборки FPGA больше ничего не нужно: RTL openTPU и библиотек скопированы в
 `vcu128_otpu/src/`.
 
