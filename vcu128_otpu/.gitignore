@@ -1,0 +1,11 @@
+ip/*/*
+!ip/*/*.xci*
+
+bd/*/*
+!bd/*/*.bd
+
+# Simulation and tool outputs
+sim/out/
+sim/*/out/
+tools/out/
+__pycache__/

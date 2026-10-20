@@ -1,0 +1,61 @@
+# The VCU128 (AMD, xcvu37p-fsvh2892-2L-e): Virtex UltraScale+ with 8 GB HBM2 (two stacks),
+# QSFP28 x4, no PCIe host link used. The accelerator is the BCU1525's (UltraScale+, DSP48E2 cells,
+# the same shell); its memory channels on HBM through otpu_hbm_port, the host link 40G Ethernet
+# instead of XDMA (doc/design.md). Stage 1: one slice; the arch values below are bcu1525.toml's
+# at S = 1 (f237dab).
+
+[target]
+name = "vcu128"
+kind = "fpga"
+platform_id = 3
+description = "VCU128: xcvu37p, HBM2 8 GB, 40G Ethernet (QSFP1); 1 slice x 2 channels"
+
+[arch]
+S = 1
+D = 128
+MCOLS = 4
+ACT_BLOCKS = 128
+ACT_ROWS = 0
+TMEM_WORDS = 65536
+IMEM_WORDS = 32768
+DRAM_BYTES = 4294967296         # per slice: 32-bit DRAM addresses (2 GiB of each of its channels)
+LANES = 8
+PAIR = true
+DSTEP = true
+STREAM = true
+SEQ_WC = false                  # the sequencer's wait entries (WAITC, EXPERIMENTAL: docs/seq_vpu.md):
+#                                 the host loads them with every program; needs WIN <= 16
+
+[uarch]
+MXU_IMPL = 2
+MXU_CL = 16
+VPU_CL = 2
+ULANES = 8
+TMEM_IMPL = 0
+RPB = 0
+WPB = 1
+WIN = 16
+FIFO_DEPTH = 1024
+TRACE_DEPTH = 16384
+PQ_WIN = 1024
+CHASH = true
+
+[tech]
+family = "xilinxus"             # rtl/tech/xilinxus: DSP48E2 cells
+part = "xcvu37p-fsvh2892-2L-e"
+vendor = "xilinx"
+
+[platform]
+board = "vcu128"
+core_mhz = 100.0                # first builds; stage 2: 150-200 MHz
+mem = "hbm2"
+mem_mts = 1800                  # HBM2 at 900 MHz (IP default), AXI ports at 225 MHz
+mem_ctrl = "xilinx_hbm"
+hostcal = false
+channels_per_slice = 2
+channel_bytes = 2147483648      # 2 GiB of global HBM address space per channel (channel j at j x this)
+channel_phys_bytes = 2147483648
+beat_bytes = 64
+host = "eth40"                  # 40GBASE-R4 on QSFP1, UDP (doc/eth40_protocol.md)
+pcie_gen = 0
+pcie_lanes = 0

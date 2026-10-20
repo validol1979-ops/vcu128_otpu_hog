@@ -1,0 +1,11 @@
+{
+  "name": "verilog-axi",
+  "upstream_url": "https://github.com/alexforencich/verilog-axi.git",
+  "commit": "516bd5dadc3365b7f9e225d2af8fe0b8d804fe53",
+  "commit_date": "2025-02-27",
+  "copied_from": "../external/rtl/verilog-axi/upstream",
+  "copied_on": "2026-10-19",
+  "license_spdx": "MIT",
+  "files": "rtl/axil_cdc*.v, syn/vivado/axil_cdc*.tcl; paths kept",
+  "local_patches": []
+}

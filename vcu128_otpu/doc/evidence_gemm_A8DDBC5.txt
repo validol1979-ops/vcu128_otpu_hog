@@ -1,0 +1,32 @@
+board: S=1 D=128 MCOLS=4 core 100.0 MHz, peak 102.4 GOPS int8 (512 MAC/cycle)
+M=  1 N=2048 K=2048:     34340 cycles     343.4 us    24.4 GOPS (23.9% of peak)  weights 12.21 GB/s  card==ISA True  rel.err 0.0118  runs [34430, 34340, 34427]  [0 s]
+M=  4 N=2048 K=2048:     36438 cycles     364.4 us    92.1 GOPS (89.9% of peak)  weights 11.51 GB/s  card==ISA True  rel.err 0.0112  runs [36453, 36438, 36492]  [0 s]
+M=  8 N=2048 K=2048:     71647 cycles     716.5 us    93.7 GOPS (91.5% of peak)  weights  5.85 GB/s  card==ISA True  rel.err 0.0112  runs [71692, 71729, 71647]  [1 s]
+Traceback (most recent call last):
+  File "vcu128_otpu/tools/gemm_bench.py", line 92, in <module>
+    main()
+    ~~~~^^
+  File "vcu128_otpu/tools/gemm_bench.py", line 84, in main
+    r = bench(a.host, cfg, khz, M, a.n, a.k, a.reps, rng)
+  File "vcu128_otpu/tools/gemm_bench.py", line 38, in bench
+    compiled, images = compile_kernel(gemm, dataclasses.replace(cfg, DRAM_BYTES=1 << 26), **args)
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/runtime.py", line 207, in compile_kernel
+    b = kernel.trace(cfg, s, bound[s])
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/compiler.py", line 2054, in trace
+    self.fn(**bound)
+    ~~~~~~~^^^^^^^^^
+  File "vcu128_otpu/tools/gemm_bench.py", line 29, in gemm
+    ol.store(out, ol.dot(ol.load(a), w))
+                  ~~~~~~^^^^^^^^^^^^^^^
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/language.py", line 120, in dot
+    return current().dot(a, w, acc, out, temp, rowmax, acc_scale)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/compiler.py", line 1888, in dot
+    out = self.alloc((N,) if one_d else (M, N), rs, spare=0 if one_d else M)
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/compiler.py", line 1237, in alloc
+    base = self._tmem_fit(n)
+  File "../external/rtl/opentpu-fesens/upstream/opentpu/compiler.py", line 1276, in _tmem_fit
+    raise CompileError(f"TMEM exhausted: a tile of {n} words, {live} of {W} in use "
+                       f"(TMEM_WORDS {self.cfg.TMEM_WORDS})")
+opentpu.compiler.CompileError: TMEM exhausted: a tile of 32800 words, 32768 of 65472 in use (TMEM_WORDS 65536)

@@ -1,0 +1,147 @@
+\documentclass[10pt,a4paper,landscape]{article}
+\usepackage[margin=10mm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=0.85]
+\usepackage[russian]{babel}
+\usepackage{fix-cm}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+\usepackage{hyperref}
+\hypersetup{pdftitle={VCU128 openTPU: структурная схема проекта},pdfauthor={VCU128 openTPU project},colorlinks=true,urlcolor=blue}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
+\definecolor{ink}{HTML}{17324D}
+\definecolor{blue}{HTML}{2369A3}
+\definecolor{green}{HTML}{207565}
+\definecolor{orange}{HTML}{AB651D}
+\definecolor{pale}{HTML}{EDF4FA}
+\tikzset{
+ b/.style={draw=blue,fill=pale,rounded corners=2mm,line width=.7pt,align=center,font=\sffamily\fontsize{8.5}{11}\selectfont,minimum height=1.0cm,text width=2.5cm,inner sep=2mm},
+ mem/.style={b,draw=green,fill=green!7},
+ sw/.style={b,draw=orange,fill=orange!7},
+ small/.style={font=\sffamily\fontsize{7.5}{9.5}\selectfont,align=center,fill=white,inner sep=1.2mm},
+ flow/.style={-{Latex[length=2.1mm]},draw=blue,line width=.85pt},
+ both/.style={{Latex[length=2.1mm]}-{Latex[length=2.1mm]},draw=blue,line width=.85pt},
+ ctl/.style={-{Latex[length=1.8mm]},draw=orange,dashed,line width=.75pt},
+ group/.style={draw=ink!40,rounded corners=3mm,dashed,inner sep=4mm},
+ note/.style={font=\sffamily\fontsize{8}{10.5}\selectfont,align=left,text=ink},
+}
+\newcommand{\heading}[3]{\textcolor{ink}{\Large\bfseries #1}\hfill\textcolor{ink!65}{\small #2 / 3}\\[2mm]
+{\small #3}\par\vspace{2mm}}
+\newcommand{\foot}[1]{\par\vspace{1mm}{\fontsize{7.3}{9}\selectfont\textcolor{ink!75}{#1}}}
+\begin{document}
+\heading{LLM + HBM: логическая структура}{1}{Авторегрессионный декодер MATLAB: LLaMA-подобная схема, INT8-проекции и FP32 KV-cache. Ethernet отсутствует.}
+\begin{center}
+\begin{tikzpicture}[x=1cm,y=1cm]
+\path[use as bounding box] (0,0) rectangle (26.7,14.4);
+\node[b,text width=1.5cm] (tok) at (1.3,12) {ID токена};
+\node[mem,text width=2.0cm] (emb) at (4.7,12) {Embedding\\FP32};
+\node[b,text width=3.3cm] (decoder) at (9.8,12) {Слои декодера $\times L$\\attention + MLP + residual};
+\node[b,text width=1.9cm] (final) at (15,12) {RMSNorm};
+\node[b,text width=2.0cm] (head) at (19,12) {LM head INT8\\логиты};
+\node[b,text width=2.0cm] (arg) at (24,12) {Argmax\\следующий ID};
+\draw[flow] (tok)--(emb); \draw[flow] (emb)--(decoder); \draw[flow] (decoder)--(final);
+\draw[flow] (final)--(head); \draw[flow] (head)--(arg);
+\draw[flow] (arg.north) -- (24,13.5) -- node[small,above]{Следующий шаг decode; сначала последовательно обрабатывается prompt} (1.3,13.5) -- (tok.north);
+\node[note,anchor=west] at (.2,10.3) {\bfseries Один слой:};
+\node[b,text width=1.8cm] (rms1) at (1.8,8.8) {RMSNorm};
+\node[b,text width=2.6cm] (qkv) at (6.2,8.8) {Q / K / V\\INT8 MXU};
+\node[b,text width=2cm] (rope) at (10.8,8.8) {RoPE\\для Q и K};
+\node[b,text width=3.2cm] (attn) at (16,8.8) {Causal GQA attention\\$QK^{T}/\sqrt{d}$ → softmax → $PV$};
+\node[b,text width=1.9cm] (out) at (21,8.8) {O-проекция\\INT8 MXU};
+\node[b,text width=1.5cm] (res1) at (24.9,8.8) {Residual\\$x + O$};
+\draw[flow] (rms1)--(qkv); \draw[flow] (qkv)--(rope); \draw[flow] (rope)--(attn);
+\draw[flow] (attn)--(out); \draw[flow] (out)--(res1);
+\draw[flow] (0,8.8) -- (rms1.west);
+\draw[flow] (.2,8.8) -- (.2,9.9) -- node[small]{Вход слоя: ветвь residual} (24.9,9.9) -- (res1.north);
+\node[b,text width=1.8cm] (rms2) at (1.8,5.3) {RMSNorm};
+\node[b,text width=2.6cm] (gu) at (6.2,5.3) {Gate / Up\\INT8 MXU};
+\node[b,text width=2cm] (silu) at (10.8,5.3) {SwiGLU\\$\mathrm{SiLU}(g)\odot u$};
+\node[b,text width=3.2cm] (down) at (16,5.3) {Down-проекция\\INT8 MXU};
+\node[b,text width=2.0cm] (res2) at (21,5.3) {Residual\\$x + \mathrm{MLP}(x)$};
+\node[b,text width=2.1cm] (next) at (24.9,5.3) {Следующий\\слой};
+\draw[flow] (rms2)--(gu); \draw[flow] (gu)--(silu); \draw[flow] (silu)--(down);
+\draw[flow] (down)--(res2); \draw[flow] (res2)--(next);
+\draw[flow] (res1.south) -- (24.9,7.2) -- (0,7.2) |- (rms2.west);
+\draw[flow] (0,5.3) -- (0,6.5) -- node[small]{Вторая ветвь residual} (21,6.5) -- (res2.north);
+\node[mem,text width=6.1cm,minimum height=1.45cm] (weights) at (4,1.8) {\textbf{HBM: веса и масштабы}\\INT8-коды, FP32 scale строки, offsets групп;\\embedding и параметры нормализации};
+\node[mem,text width=5.5cm,minimum height=1.45cm] (cache) at (13.3,1.8) {\textbf{HBM: KV-cache каждого слоя}\\запись K/V текущей позиции;\\чтение K/V всего доступного префикса};
+\node[mem,text width=5.9cm,minimum height=1.45cm] at (23,1.8) {\textbf{Память текущей цели}\\$S=1$: 2 логических канала $\times$ 2 GiB\\на плате физически 8 GiB HBM2};
+\draw[flow] (weights.north) -- (4,3.3) -- node[small,above]{Веса Gate/Up} (6.2,3.3) -- (gu.south);
+\draw[flow] (cache.north) -- (13.3,7.6) -- node[small,below]{K/V префикса} (attn.south);
+\node[note,text width=8cm,anchor=west] at (.2,.1) {Синие стрелки: данные и порядок вычислений.\\Общий декодер; архитектура LFM/Qwen отличается.};
+\node[note,text width=11.5cm,anchor=west] at (11,.1) {Размер cache: $2LTH_{KV}d\cdot4$ байт (FP32).\\$T$ — контекст; $H_{KV}$ — KV heads; $d$ — размерность head.};
+\end{tikzpicture}
+\end{center}
+\foot{Основа: sim/matlab/+otpu/llm\_step.m, llm\_init.m, llm\_event.m. Веса примера случайные; VPU-функции математические, время HBM оценочное.}
+\newpage
+\heading{FPGA: openTPU на VCU128}{2}{Реальная аппаратная структура: otpu\_vcu128\_top, xcvu37p-fsvh2892-2L-e; текущая конфигурация S=1, D=128, MCOLS=4.}
+\begin{center}
+\begin{tikzpicture}[x=1cm,y=1cm]
+\path[use as bounding box] (0,0) rectangle (26.7,14.4);
+\node[b,text width=2.5cm] (host) at (1.6,12.6) {ПК / Board API\\EthTransport};
+\node[b,text width=3cm] (mac) at (6.3,12.6) {QSFP1 / GTY 135\\40G MAC / PCS\\\texttt{eth40\_qsfp1}};
+\node[b,text width=3.4cm] (bridge) at (12.1,12.6) {UDP ↔ AXI мост\\\texttt{otpu\_eth\_bridge}};
+\node[sw,text width=2.9cm] (ereg) at (17.7,12.6) {\texttt{eth40\_regs}\\\texttt{0x50000}, eth\_clk};
+\draw[both] (host)--node[small,above]{DAC / 40G} (mac);
+\draw[both] (mac)--node[small,above]{AXIS 256 бит} (bridge);
+\draw[both] (bridge)--(ereg);
+\node[b,text width=4.3cm,minimum height=1.7cm] (board) at (3.7,8) {\texttt{otpu\_board} → \texttt{otpu\_top}\\\textbf{1 вычислительный слайс}\\SEQ / IMEM, MXU, VPU, DMA,\\QUANT, ACT RAM, TMEM};
+\node[b,text width=3.5cm,minimum height=1.7cm] (memch) at (10.3,8) {\texttt{otpu\_mem\_ch} $\times 2$\\арбитраж ядра / хоста, RMW\\CDC: core / xclk / uclk};
+\node[b,text width=3.6cm,minimum height=1.7cm] (port) at (16.7,8) {\texttt{otpu\_hbm\_port} $\times 2$\\RAW / WAR / WAW, очереди\\native beat 64 B → $2\times256$ бит};
+\node[mem,text width=3.8cm,minimum height=1.7cm] (hbm) at (23.5,8) {\texttt{hbm\_0}: Xilinx HBM IP\\4 подключённых AXI3-порта\\HBM2: два стека, 8 GiB\\активные окна: 4 GiB};
+\draw[both] (board)--node[small,above]{native 512 бит} (memch);
+\draw[both] (memch)--node[small,above]{2 native-порта\\на канал} (port);
+\draw[both] (port)--node[small,above]{AXI3 256 бит\\uclk = 225 MHz} (hbm);
+\draw[both] (bridge.south) -- (12.1,10.3) -- node[small,above]{AXI4 DMA 128 бит / канал, xclk = eth\_clk} (10.3,10.3) -- (memch.north);
+\node[sw,text width=3cm] (cdc) at (24,12.6) {\texttt{axil\_cdc}\\eth\_clk → core\_clk};
+\draw[ctl] (bridge.north) -- (12.1,14) -- node[small,above]{AXI-Lite: остальные окна} (24,14) -- (cdc.north);
+\node[sw,text width=3.4cm] (jtag) at (2.5,4.3) {JTAG → AXI\\\texttt{jtag\_axi\_0}};
+\node[sw,text width=4cm] (xbar) at (8.6,4.3) {\texttt{vcu128\_axil\_xbar}\\2 мастера, 3 slave-окна\\AXI-Lite, данные 32 бита};
+\node[sw,text width=3.6cm] (plat) at (15.3,4.3) {\texttt{vcu128\_platform\_regs}\\\texttt{0x40000}\\калибровка, T, ошибки HBM};
+\node[sw,text width=3.8cm] (init) at (23,4.3) {\texttt{eth40\_mac\_init}\\и регистры MAC\\\texttt{0x60000}};
+\draw[ctl] (jtag)--(xbar); \draw[ctl] (xbar)--(plat);
+\draw[ctl] (xbar.north) -- (8.6,5.8) -| node[small,near start,above]{\texttt{0x00000}: s\_ctl / запуск / статус} (board.south);
+\draw[ctl] (cdc.south) -- (26,11.2) -- (26,6.2) -- (11,6.2) |- (xbar.east);
+\draw[ctl] (xbar.south) -- (8.6,2.9) -- (23,2.9) -- (init.south);
+\node[note,text width=25.7cm,anchor=west] at (.3,1.7) {\textbf{Тактирование по RTL:} QDR4\_CLK\_100MHZ → MMCM → core\_clk 100 MHz и uclk 225 MHz.\\DDR4\_CLK\_100MHZ → HBM\_REF\_CLK 100 MHz. core\_clk обслуживает регистры, APB HBM и MAC init/DRP.};
+\node[note,text width=25.7cm,anchor=west] at (.3,.3) {\textbf{Адреса данных:} канал $j$: $j\cdot2$ GiB, размер окна 2 GiB; по 2 AXI3-порта на логический канал.\\Синие стрелки — данные; оранжевые пунктирные — управление. 40G показан как интерфейс платы и не входит в MATLAB-модель.};
+\end{tikzpicture}
+\end{center}
+\foot{Основа: src/otpu\_vcu128\_top.sv и upstream otpu\_bcu\_sys.sv. eth\_clk берётся из MAC tx\_clk\_out; частота в старом описании и журнале расходится, поэтому здесь не фиксируется.}
+\newpage
+\heading{MATLAB: структура симуляции и результатов}{3}{Два режима: численный небольшой LLM и символьный профиль больших размерностей. Общие параметры устройства и модель трафика HBM.}
+\begin{center}
+\begin{tikzpicture}[x=1cm,y=1cm]
+\path[use as bounding box] (0,0) rectangle (26.7,14.4);
+\node[sw,text width=4.2cm] (target) at (3,12.7) {\texttt{target/vcu128.toml}\\\texttt{otpu.config}\\S, D, MCOLS, LANES, частота};
+\node[sw,text width=4.2cm] (params) at (11,12.7) {\texttt{otpu.llm\_config}\\слои, hidden, heads, vocab,\\контекст, prompt, generate};
+\node[mem,text width=4.5cm] (hpar) at (22.8,12.7) {Параметры HBM-модели\\uclk, RD / WD, задержки,\\размер активной памяти};
+\node[sw,text width=3.1cm] (demo) at (2.5,9.7) {\texttt{run\_demo}\\численный режим};
+\node[b,text width=4.0cm] (generate) at (8.6,9.7) {\texttt{llm\_init / llm\_generate}\\случайные веса, prefill,\\greedy decode};
+\node[b,text width=5.5cm] (step) at (16.7,9.7) {\texttt{llm\_step}\\attention / GQA / RoPE / RMSNorm\\SwiGLU / residual / KV-cache};
+\draw[flow] (demo)--(generate); \draw[flow] (generate)--(step);
+\draw[ctl] (target.south) -- (3,11.2) -- (8.6,11.2) -- (generate.north);
+\draw[ctl] (params.south) -- (11,11.2) -- (16.7,11.2) -- (step.north);
+\node[b,text width=4.5cm] (arith) at (7.3,6.7) {\texttt{quantize → mm → fp}\\QACT / QST INT8, offsets, W=16\\FP32 / FTZ / nearest even};
+\node[mem,text width=5.4cm] (event) at (16.7,6.7) {\texttt{llm\_event}\\байты весов / KV, память / вычисления\\$t_{op}=\max(t_{HBM},t_{compute})$};
+\draw[both] (step.south west) -- (12.5,8.2) -| (arith.north);
+\draw[flow] (step)--(event);
+\draw[ctl] (hpar.south) -- (22.8,6.7) -- (event.east);
+\node[sw,text width=3.1cm] (prof) at (2.5,3.7) {\texttt{run\_profile}\\символьный режим};
+\node[b,text width=4.0cm] (profile) at (8.6,3.7) {\texttt{llm\_profile}\\размеры операций без тензоров\\контекст → время и ёмкость};
+\draw[flow] (prof)--(profile);
+\draw[flow] (profile.east) -- (12,3.7) -- (12,5.2) -| (event.south);
+\node[sw,text width=5.7cm,minimum height=1.4cm] (output) at (23.1,3.7) {\textbf{Результаты}\quad \texttt{out/}\\MAT: состояние, логиты, трассы\\CSV: операции и HBM-трафик\\PNG: время токена / cache / профиль};
+\draw[flow] (event.south) -- (16.7,3.7) -- (output.west);
+\node[mem,text width=7.7cm,minimum height=1.5cm] (native) at (5,1) {\textbf{Отдельная модель native/HBM}\\\texttt{hbm\_address}: точная перестановка адресов\\\texttt{hbm}: RAW/WAR/WAW, маски, слоты, порядок\\не подключена к численному декодеру};
+\node[sw,text width=7.5cm,minimum height=1.5cm] at (15.2,1) {\textbf{Проверки}\quad \texttt{test\_otpu / test\_llm}\\JSON-вектора upstream для MXU, адресация HBM,\\память, causal cache, генерация, ёмкость,\\согласованность численного и символьного времени};
+\node[note,text width=5cm] at (24,1) {Проверено: Octave 8.4.\\MATLAB: прямой прогон\\пока не выполнен.};
+\end{tikzpicture}
+\end{center}
+\foot{Границы модели: случайные веса; без tokenizer, checkpoint LFM/Qwen, Ethernet и потактового исполнения ISA. Побитовое совпадение — для тестовых INT8 MM; время LLM/HBM — оценка.}
+\end{document}

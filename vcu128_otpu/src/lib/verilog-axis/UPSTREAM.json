@@ -1,0 +1,11 @@
+{
+  "name": "verilog-axis",
+  "upstream_url": "https://github.com/alexforencich/verilog-axis.git",
+  "commit": "48ff7a7e2ef782cf778d47910cf85835c64b1bce",
+  "commit_date": "2025-02-27",
+  "copied_from": "../external/rtl/verilog-axis/upstream",
+  "copied_on": "2026-10-19",
+  "license_spdx": "MIT",
+  "files": "rtl/axis_fifo.v, rtl/axis_register.v; paths kept",
+  "local_patches": []
+}

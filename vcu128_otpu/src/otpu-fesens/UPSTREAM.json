@@ -1,0 +1,11 @@
+{
+  "name": "opentpu-fesens",
+  "upstream_url": "https://github.com/FeSens/openTPU.git",
+  "commit": "f237dab2f196855a59a083b1454786df8f01291f",
+  "commit_date": "2026-10-14",
+  "copied_from": "../external/rtl/opentpu-fesens/upstream",
+  "copied_on": "2026-10-19",
+  "license_spdx": "Apache-2.0",
+  "files": "rtl/{top,mxu,vpu,mem,seq,dma,shell,tech/xilinxus,tech/generic}, rtl/boards/bcu1525/otpu_bcu_sys.sv (generic: otpu_board + otpu_mem_ch per channel), boards/ypcb-00338/constraints/{otpu_mem_ch,otpu_clk2x}.tcl; paths kept",
+  "local_patches": []
+}
