@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 15:06:18 +0300
-Subject: [PATCH 11/11] board: a hung generate run is reported and bounded
+Subject: [PATCH 11/12] board: a hung generate run is reported and bounded
  (TOKEN_TIMEOUT 60 s, hang_report); serve: stack dump on SIGUSR1
 
 run_generate gave up after RUN_TIMEOUT (600 s) without a token, with nothing to say what the
