@@ -1,0 +1,191 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 15:06:18 +0300
+Subject: [PATCH 11/11] board: a hung generate run is reported and bounded
+ (TOKEN_TIMEOUT 60 s, hang_report); serve: stack dump on SIGUSR1
+
+run_generate gave up after RUN_TIMEOUT (600 s) without a token, with nothing to say what the
+card was doing. Now TOKEN_TIMEOUT (60 s, OTPU_TOKEN_TIMEOUT) bounds it; before the stop the
+card's registers (STATUS, PROG_*, CYCLES, ICOUNT per slice, port counters, read twice, and the
+free-running counters' change) and the state block go to stderr (Board.hang_report); a run still
+going after the abort is reported. otpu-serve registers faulthandler on SIGUSR1.
+
+diff --git a/opentpu/host/board.py b/opentpu/host/board.py
+index 62ec96ce..d1c846d2 100644
+--- a/opentpu/host/board.py
++++ b/opentpu/host/board.py
+@@ -100,8 +100,12 @@ STREAM_PROBE = 0.5e-3           # probe interval when no completion time is know
+ TAIL_SETTLE = 5e-3              # after HALTED: how long the last stores may take to land
+ WR_SETTLE = 2e-3                # after HALTED: WR_IDLE read back to back this long, then polled
+                                 # up to QUIET_WAIT (not seen then: an error)
+-RUN_TIMEOUT = 600.0             # the longest run (Board.wait), and the longest a generate run may
+-                                # go without a token (run_generate)
++RUN_TIMEOUT = 600.0             # the longest run (Board.wait)
++# the longest a generate run may go without a token (run_generate; a decode token takes tens of
++# ms): past it the run is taken for hung, its registers reported (Board.hang_report) and it is
++# stopped. OTPU_TOKEN_TIMEOUT=<seconds> overrides it.
++TOKEN_TIMEOUT = float(os.environ.get("OTPU_TOKEN_TIMEOUT") or 60.0)
++HANG_PAUSE = 0.2                # hang_report: the registers read twice, this far apart
+ # Ending a run (Board.stop; docs/observability.md, "Stopping a run"): CTRL = 0, then STATUS
+ # WR_IDLE (QUIET), then DRAM writes, a LOAD or a RUN. The run's writes given to the memory
+ # still land after CTRL = 0: WR_IDLE orders the host's DMA writes after them. Its reads in
+@@ -893,6 +897,33 @@ class Board:
+                 break
+         return self.snap_dict(v[1:], rm)
+ 
++    def hang_report(self, pause: float = HANG_PAUSE) -> dict:
++        """The card's state, for a run taken for hung: STATUS, the program (PROG_ADDR, PROG_N),
++        CYCLES and ICOUNT (each slice's on a multi-slice bitstream), the port counters, read
++        twice `pause` seconds apart ("then": the second read), with the free-running counters'
++        change between them ("moved": a core still issuing, a DRAM still answering, or not).
++        Read only: the run is not touched."""
++        names = ["STATUS", "PROG_ADDR", "PROG_N", "CYCLES", "CYCLES_HI", "ICOUNT", "B_RD", "B_WR",
++                 "A_RD", "A_WR", "B_STALL"]
++        offs = [R_STATUS, R.R_PROG_ADDR, R.R_PROG_N, R.R_CYCLES, R.R_CYCLES_HI, R.R_ICOUNT,
++                R.R_B_RD, R.R_B_WR, R.R_A_RD, R.R_A_WR, R.R_B_STALL]
++        cfg = (self._info or {}).get("cfg") or {}
++        for s in range(1, cfg.get("S", 1)):
++            names.append(f"ICOUNT{s}")
++            offs.append(R.R_ICOUNT_S + 4 * s)
++
++        def read() -> tuple[dict, dict | None]:
++            v = self.t.reg_read_many(offs)
++            return dict(zip(names, v)), self.snapshot()
++        r0, c0 = read()
++        time.sleep(pause)
++        r1, c1 = read()
++        d = {"now": r0, "then": {k: v for k, v in r1.items() if v != r0[k]},
++             "running": bool(r0["STATUS"] & ST_RUN), "halted": bool(r0["STATUS"] & ST_HALTED)}
++        if c0 is not None and c1 is not None:
++            d["moved"] = {k: c1[k] - c0[k] for k in c0 if k != "snaps" and c1[k] != c0[k]}
++        return d
++
+     @staticmethod
+     def snap_dict(v: list[int], regmap: int) -> dict:
+         """Values read at snap_offs(regmap) -> {counter: 64-bit count, "snaps": n}."""
+@@ -1935,7 +1966,8 @@ class BoardBackend:
+         flight. Returns (the run's counters, the tokens). The host reads 64-byte beats of out[]
+         only, never the logits. The stop word's beat holds the host's words only (generate.py's
+         state block), and Board.write writes that beat alone: the card's state stores beside it
+-        are never rewritten. A run that hands over no token for RUN_TIMEOUT seconds is an error;
++        are never rewritten. A run that hands over no token for TOKEN_TIMEOUT seconds is an error
++        (the card's registers and the state block go to stderr first: Board.hang_report);
+         on any error (KeyboardInterrupt, SystemExit too) the stop word goes out and the run gets
+         STOP_WAIT to halt after its token before it is cut short (Board.stop). With the host's
+         hook (self.host: a streamed MoE's servers) it is served until the card halts, past the
+@@ -1976,10 +2008,11 @@ class BoardBackend:
+                         continue
+                 if t.reg_read(R_STATUS) & ST_HALTED:
+                     break
+-                if time.perf_counter() - t_tok > RUN_TIMEOUT:
++                if time.perf_counter() - t_tok > TOKEN_TIMEOUT:
++                    self._hang_report(state, k, n)
+                     raise TimeoutError(f"the generate run handed over no token in "
+-                                       f"{RUN_TIMEOUT:.0f} s ({k} of {n} so far)" if k < n else
+-                                       f"the generate run did not halt in {RUN_TIMEOUT:.0f} s "
++                                       f"{TOKEN_TIMEOUT:.0f} s ({k} of {n} so far)" if k < n else
++                                       f"the generate run did not halt in {TOKEN_TIMEOUT:.0f} s "
+                                        f"after its last token, served all along")
+                 if stop is not None and not asked and state is not None and stop():
+                     b.write(state + 4 * G.S_HALT, np.ones(1, np.float32))
+@@ -2002,6 +2035,13 @@ class BoardBackend:
+                 except Exception:               # noqa: BLE001 (the error raised is the one)
+                     pass
+             b.abort(STOP_WAIT)
++            try:
++                st = t.reg_read(R_STATUS)
++                if st & ST_RUN:
++                    print(f"otpu: the generate run is not stopped (STATUS {st:#x})",
++                          file=sys.stderr, flush=True)
++            except Exception:                   # noqa: BLE001
++                pass
+             raise
+         self._running = None
+         while k < n and take():                            # the last tokens, after HALTED
+@@ -2014,6 +2054,21 @@ class BoardBackend:
+             self.status.token(st["cycles"], khz, dram=self._layout(True))
+         return st, got
+ 
++    def _hang_report(self, state: int | None, k: int, n: int) -> None:
++        """A generate run taken for hung: the card's registers (Board.hang_report) and its state
++        block's words (generate.py S_*) to stderr, before it is stopped. Never raises."""
++        from opentpu.llm import generate as G
++        try:
++            d = self.board.hang_report()
++            if state is not None:
++                d["state"] = [float(x) for x in self.board.read(state, 4 * (G.S_PEN + 2))
++                              .view(np.float32)]
++            print(f"otpu: generate run hung after {k} of {n} tokens: {d}", file=sys.stderr,
++                  flush=True)
++        except Exception as e:                  # noqa: BLE001
++            print(f"otpu: generate run hung after {k} of {n} tokens (no report: {e})",
++                  file=sys.stderr, flush=True)
++
+     def close(self) -> None:
+         if self.status is not None:
+             self.status.remove()
+diff --git a/opentpu/serve/api.py b/opentpu/serve/api.py
+index 35ab956e..8bd308b9 100644
+--- a/opentpu/serve/api.py
++++ b/opentpu/serve/api.py
+@@ -25,8 +25,10 @@ server: no dependency beyond the chat's.
+ from __future__ import annotations
+ 
+ import argparse
++import faulthandler
+ import json
+ import os
++import signal
+ import sys
+ import time
+ import uuid
+@@ -960,6 +962,8 @@ def main(argv=None):
+                     help="a streamed MoE: /health says 503 'warming' while its expert pool is "
+                          "read into the page cache, at most this many seconds (0: never)")
+     a = ap.parse_args(argv)
++    if hasattr(signal, "SIGUSR1"):      # kill -USR1 <pid>: every thread's stack to stderr (a hang)
++        faulthandler.register(signal.SIGUSR1, all_threads=True)
+     return busy_exits(_main)(a)
+ 
+ 
+diff --git a/tests/test_host_runs.py b/tests/test_host_runs.py
+index 0ee3002a..7c409fae 100644
+--- a/tests/test_host_runs.py
++++ b/tests/test_host_runs.py
+@@ -323,11 +323,14 @@ def test_wr_idle_that_never_rises_is_an_error(monkeypatch):
+         b.run()
+ 
+ 
+-def test_the_host_hooks_wait_and_a_silent_generate_run_are_bounded(monkeypatch):
++def test_the_host_hooks_wait_and_a_silent_generate_run_are_bounded(monkeypatch, capsys):
+     """BoardBackend._serve (the expert server's polls while a MoE run waits on them) and
+-    run_generate (no token for RUN_TIMEOUT) end with a TimeoutError instead of spinning with
+-    the lock held, and stop the run."""
++    run_generate (no token for TOKEN_TIMEOUT) end with a TimeoutError instead of spinning with
++    the lock held, and stop the run; a silent generate run's registers and state block are
++    reported first (stderr)."""
+     monkeypatch.setattr(B, "RUN_TIMEOUT", 0.2)
++    monkeypatch.setattr(B, "TOKEN_TIMEOUT", 0.2)
++    monkeypatch.setattr(B, "HANG_PAUSE", 0.01)
+     monkeypatch.setattr(B, "STOP_WAIT", 0.05)
+     t = FakeTransport(run_s=1e9, devname=None, gen=True)
+     be = BoardBackend(board_config(DRAM_BYTES=1 << 21), [np.zeros(1 << 16, np.uint8)],
+@@ -340,9 +343,16 @@ def test_the_host_hooks_wait_and_a_silent_generate_run_are_bounded(monkeypatch):
+     from opentpu.llm import generate as G
+     out = (1 << 16) + 4096
+     be.board.write(out, np.full(64, G.OUT_MARK, np.uint32))
+-    with pytest.raises(TimeoutError, match="no token"):
+-        be.run_generate(np.zeros(16, np.uint32), out, 16)
++    state = out + 4096
++    be.board.write(state, np.arange(G.S_PEN + 2, dtype=np.float32))
++    capsys.readouterr()
++    with pytest.raises(TimeoutError, match="no token in 0 s"):
++        be.run_generate(np.zeros(16, np.uint32), out, 16, state=state)
+     assert not t.regs[R.R_CTRL] & R.CTRL_RUN
++    err = capsys.readouterr().err
++    assert "generate run hung after 0 of 16 tokens" in err and "'STATUS'" in err
++    assert "'running': True" in err and "'halted': False" in err
++    assert "'state': [0.0, 1.0, 2.0" in err
+     be.close()
+ 
+ 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 15:34:06 +0300
-Subject: [PATCH 04/10] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at
+Subject: [PATCH 04/11] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at
  any S, SLL2 (two SLR crossings), CH_LOG2
 
 - otpu_board: CH_LOG2 (default 31): the channel size it reports (CFG_DRAM: DRAM_LOG2 =
