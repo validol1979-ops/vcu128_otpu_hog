@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VCU128 openTPU — чат</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7385; --line: #dfe3ea;
+          --me: #e7efff; --bot: #fff; --accent: #2f6fde; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --panel: #1b1f26; --text: #e4e8ef; --muted: #8d96a8; --line: #2b313b;
+            --me: #22324f; --bot: #1b1f26; --accent: #6b9cf5; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+           display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  header b { font-size: 16px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  header button { margin-left: auto; }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: min(860px, 100%); padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line);
+         white-space: pre-wrap; word-wrap: break-word; }
+  .me { align-self: flex-end; background: var(--me); }
+  .bot { align-self: flex-start; background: var(--bot); }
+  .stat { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: normal; }
+  .live { color: var(--accent); font-size: 13px; margin-top: 6px; white-space: normal; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+         margin-right: 6px; animation: pulse 1s infinite ease-in-out; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+  #load { font-size: 13px; color: var(--muted); }
+  details#info { border-bottom: 1px solid var(--line); background: var(--panel); padding: 6px 16px; font-size: 13px; }
+  details#info summary { cursor: pointer; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 24px; padding: 8px 0 4px; }
+  .grid h4 { margin: 0 0 4px; font-size: 13px; }
+  .grid table { border-collapse: collapse; width: 100%; }
+  .grid td { padding: 1px 0; vertical-align: top; }
+  .grid td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
+  .err { color: #d14343; }
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  textarea { flex: 1; resize: none; height: 64px; padding: 8px 10px; font: inherit; color: var(--text);
+             background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  code { background: var(--bg); padding: 0 3px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <b>openTPU на VCU128</b>
+  <span class="meta" id="model">модель: …</span>
+  <span class="meta">генерация на ПЛИС, ответы не покидают локальную сеть</span>
+  <span id="load"></span>
+  <button id="reset" type="button">Новый диалог</button>
+</header>
+<details id="info"><summary>О системе: модель, плата, конфигурация</summary>
+  <div class="grid">
+    <div><h4>Модель ИИ</h4><table id="i_model"></table></div>
+    <div><h4>Плата</h4><table>
+      <tr><td>Плата</td><td>AMD VCU128</td></tr>
+      <tr><td>ПЛИС</td><td>Virtex UltraScale+ HBM xcvu37p (3 SLR)</td></tr>
+      <tr><td>Память</td><td>HBM2 8 ГБ (2 стека, 32 псевдоканала)</td></tr>
+      <tr><td>Связь с ПК</td><td>40G Ethernet (QSFP1)</td></tr>
+      <tr><td>Ускоритель</td><td>openTPU (FeSens), int8 / fp4, MXU на DSP48E2</td></tr>
+    </table></div>
+    <div><h4>Конфигурация и работа</h4><table id="i_cfg"></table></div>
+  </div>
+</details>
+<div id="log"></div>
+<form id="f">
+  <textarea id="q" placeholder="Сообщение… (Enter — отправить, Shift+Enter — новая строка)" autofocus></textarea>
+  <button class="primary" id="send">Отправить</button>
+  <button id="stop" type="button" disabled>Стоп</button>
+</form>
+<script>
+const log = document.getElementById("log"), q = document.getElementById("q");
+const send = document.getElementById("send"), stopBtn = document.getElementById("stop");
+let model = "", maxLen = 0, history = [], ctrl = null;
+try { history = JSON.parse(localStorage.getItem("otpu_history") || "[]"); } catch (e) { history = []; }
+
+function esc(s) { return s.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c])); }
+function fmt(s) {  // light markdown: **bold**, `code`
+  return esc(s).replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/`([^`\n]+)`/g, "<code>$1</code>");
+}
+function add(role, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + (role === "user" ? "me" : "bot");
+  d.innerHTML = fmt(text);
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  return d;
+}
+function save() { try { localStorage.setItem("otpu_history", JSON.stringify(history)); } catch (e) {} }
+history.forEach(m => add(m.role, m.content));
+
+fetch("/api/models").then(r => r.json()).then(d => {
+  model = d.data[0].id; maxLen = d.data[0].max_model_len || 0;
+  document.getElementById("model").textContent = `модель: ${model}, контекст ${d.data[0].max_model_len || "?"} токенов`;
+}).catch(() => { document.getElementById("model").textContent = "сервер модели недоступен"; });
+
+document.getElementById("reset").onclick = () => { history = []; save(); log.innerHTML = ""; q.focus(); };
+stopBtn.onclick = () => { if (ctrl) ctrl.abort(); };
+q.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("f").requestSubmit(); }
+});
+
+function plural(n, a, b, c) { const m = n % 10, h = n % 100;
+  return (m === 1 && h !== 11) ? a : (m >= 2 && m <= 4 && (h < 12 || h > 14)) ? b : c; }
+async function pollLoad() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    document.getElementById("load").textContent = s.active
+      ? `· сервер: генерируется ${s.generating}, в очереди ${s.waiting}` : "· сервер свободен";
+  } catch (e) {}
+}
+pollLoad(); setInterval(pollLoad, 3000);
+
+function rows(el, list) {
+  document.getElementById(el).innerHTML = list.filter(r => r[1] !== undefined && r[1] !== null && r[1] !== "")
+    .map(r => `<tr><td>${esc(r[0])}</td><td>${esc(String(r[1]))}</td></tr>`).join("");
+}
+function gib(b) { return b ? (b / 2 ** 30).toFixed(0) + " ГиБ" : undefined; }
+async function pollInfo() {
+  try {
+    const d = await (await fetch("/api/info")).json();
+    const v = d.device || {}, tp = d.throughput || {};
+    const cfg = String(d.config || ""), hash = (cfg.match(/hash ([0-9a-f]+)/) || [])[1];
+    rows("i_model", [["Модель", d.model], ["Веса", d.weights], ["Контекст", d.cap && `${d.cap} токенов`],
+                     ["Исполнение", d.backend === "board" ? "на плате (генерация на ПЛИС)" : d.backend]]);
+    const up = d.uptime_s ? `${Math.floor(d.uptime_s / 3600)} ч ${Math.floor(d.uptime_s / 60) % 60} мин` : undefined;
+    rows("i_cfg", [
+      ["Слайсы openTPU", v.slices], ["Частота ядра", v.core_mhz && `${v.core_mhz} МГц`],
+      ["MXU", v.D && v.MCOLS && `${v.D}×${v.MCOLS} (глубина × столбцы)`], ["Линии VPU", v.LANES],
+      ["Память на слайс", gib(v.dram_bytes_per_slice) && `${gib(v.dram_bytes_per_slice)}, ${v.channels_per_slice} канала HBM`],
+      ["Прошивка (build)", v.build_id], ["Хэш конфигурации", hash],
+      ["Температура при загрузке", v.temp_c_at_load !== undefined ? `${v.temp_c_at_load} °C` : undefined],
+      ["Скорость генерации", tp.decode_tok_s && `${tp.decode_tok_s} ток/с (среднее)`],
+      ["Запросов / токенов", d.finished !== undefined && `${d.finished} / ${d.generated}`],
+      ["Сервер работает", up]]);
+  } catch (e) {}
+}
+pollInfo(); setInterval(pollInfo, 10000);
+
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault();
+  const text = q.value.trim();
+  if (!text || ctrl) return;
+  q.value = "";
+  history.push({role: "user", content: text}); save(); add("user", text);
+  const box = add("assistant", "");
+  const live = document.createElement("div"); live.className = "live";
+  let out = "", t0 = performance.now(), t1 = 0, n = 0, rid = null, usage = null, waitMsg = "отправка запроса…";
+  const render = () => {
+    const el = ((performance.now() - t0) / 1000).toFixed(1);
+    if (!t1) {
+      live.innerHTML = `<span class="dot"></span>${waitMsg} · ${el} с`;
+    } else {
+      const g = (performance.now() - t1) / 1000, r = n > 1 && g > 0 ? (n - 1) / g : 0;
+      live.innerHTML = `<span class="dot"></span>генерируется: ${n} ${plural(n, "токен", "токена", "токенов")}` +
+        ` · ${r.toFixed(1)} ток/с · ${el} с`;
+    }
+    box.innerHTML = fmt(out); box.appendChild(live); log.scrollTop = log.scrollHeight;
+  };
+  const timer = setInterval(render, 200);
+  const poll = setInterval(async () => {
+    if (!rid || t1) return;
+    try {
+      const s = await (await fetch("/api/status?id=" + rid)).json();
+      if (s.known) waitMsg = s.ahead > 0
+        ? `в очереди: перед вами ${s.ahead} ${plural(s.ahead, "запрос", "запроса", "запросов")}`
+        : "обработка запроса (чтение подсказки)…";
+    } catch (e) {}
+  }, 1000);
+  ctrl = new AbortController(); send.disabled = true; stopBtn.disabled = false; render();
+  let err = "";
+  try {
+    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({model, messages: history, temperature: 0.7, max_tokens: 4096}),
+      signal: ctrl.signal});
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`);
+    rid = r.headers.get("X-Req-Id"); waitMsg = "ожидание сервера модели…";
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const {value, done} = await rd.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+        let j; try { j = JSON.parse(data); } catch (_) { continue; }
+        if (j.otpu_req) { rid = j.otpu_req; continue; }
+        if (j.otpu_error) { err = j.otpu_error; continue; }
+        if (j.usage) usage = j.usage;
+        const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+        if (delta) { if (!t1) t1 = performance.now(); out += delta; n++; }
+      }
+    }
+  } catch (x) {
+    if (x.name !== "AbortError") err = String(x);
+  }
+  clearInterval(timer); clearInterval(poll);
+  const t2 = performance.now();
+  box.innerHTML = fmt(out) + (err ? `<div class="err">${esc(err)}</div>` : "");
+  if (out) {
+    history.push({role: "assistant", content: out}); save();
+    const toks = usage ? usage.completion_tokens : n;
+    const rate = t1 && t2 > t1 && toks > 1 ? (toks - 1) / ((t2 - t1) / 1000) : 0;
+    let s = `ответ ${toks} ${plural(toks, "токен", "токена", "токенов")} · ${rate.toFixed(1)} ток/с · ` +
+      `первый токен через ${((t1 - t0) / 1000).toFixed(2)} с · всего ${((t2 - t0) / 1000).toFixed(1)} с`;
+    if (usage) {
+      s += ` · запрос ${usage.prompt_tokens} ток.`;
+      if (maxLen) s += ` · контекст ${usage.prompt_tokens + usage.completion_tokens} / ${maxLen}`;
+    }
+    box.insertAdjacentHTML("beforeend", `<div class="stat">${s}</div>`);
+  } else if (!err) {
+    box.innerHTML = `<div class="stat">остановлено</div>`;
+  }
+  ctrl = null; send.disabled = false; stopBtn.disabled = true; q.focus();
+};
+</script>
+</body>
+</html>

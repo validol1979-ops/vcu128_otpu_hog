@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 14:26:25 +0300
+Subject: [PATCH 10/10] serve: /get_server_info reports the configuration and
+ the card (config, device)
+
+Server.stats (/get_server_info, /v1/stats) adds 'config' (chat.describe_config: slices, MXU, lanes,
+optional features, DRAM, hash) and, on a card, 'device' from Board.info at load (D, MCOLS, LANES,
+slices, DRAM per slice, channels, platform, core MHz, build id, sensor reading at load, register map),
+for a status page. An engine without a cfg adds nothing. tests/test_serve_api.py, test_serve_scheduler.py,
+test_serve_batching.py: 27 passed.
+
+diff --git a/opentpu/serve/api.py b/opentpu/serve/api.py
+index 03ce2c28..35ab956e 100644
+--- a/opentpu/serve/api.py
++++ b/opentpu/serve/api.py
+@@ -481,7 +481,29 @@ class Server:
+         return {"model": self.name, "uptime_s": round(up, 1), **self.info,
+                 "throughput": {"generated_tok_s": round(u["generated"] / up, 2) if up else 0,
+                                "decode_tok_s": round(u["generated"] / dec, 2) if dec else None},
+-                **warm, **u}
++                **self.device(), **warm, **u}
++
++    def device(self) -> dict:
++        """The configuration the model runs in (chat.describe_config: slices, MXU, lanes, hash) and,
++        on a card, what its bitstream reported at load (Board.info: build, core clock, sensor)."""
++        from ..host.chat import describe_config
++        eng = self.w.eng
++        cfg = getattr(eng, "cfg", None)
++        if cfg is None:                     # (an engine without one: a test's stand-in)
++            return {}
++        out = {"config": describe_config(cfg)}
++        info = getattr(getattr(eng, "backend", None), "info", None)
++        if info:
++            c = info.get("cfg") or {}
++            out["device"] = {k: v for k, v in {
++                "D": info.get("D"), "MCOLS": info.get("MCOLS"), "LANES": info.get("LANES"),
++                "slices": c.get("S"), "dram_bytes_per_slice": c.get("DRAM_BYTES"),
++                "channels_per_slice": c.get("channels"), "platform": c.get("platform"),
++                "core_mhz": info["core_khz"] / 1e3 if info.get("core_khz") else None,
++                "build_id": f"{info['build_id']:08x}" if info.get("build_id") is not None else None,
++                "temp_c_at_load": info.get("temp_c"), "regmap": info.get("regmap")}.items()
++                if v is not None}
++        return out
+ 
+     def health(self) -> tuple[int, dict]:
+         """/health's status and body. While the expert pool's read into the page cache runs

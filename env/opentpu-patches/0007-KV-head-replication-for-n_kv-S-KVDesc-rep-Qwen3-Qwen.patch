@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:32:08 +0300
-Subject: [PATCH 7/9] KV-head replication for n_kv < S (KVDesc rep): Qwen3 /
+Subject: [PATCH 07/10] KV-head replication for n_kv < S (KVDesc rep): Qwen3 /
  Qwen3.5 / LFM2 at S > n_kv
 
 When S % n_kv == 0 and n_q % S == 0, each slice takes n_q / S consecutive query heads and KV head
