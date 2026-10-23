@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:37:20 +0300
-Subject: [PATCH 8/8] fit_embed: int8 embedding table where an fp32 one takes
+Subject: [PATCH 8/9] fit_embed: int8 embedding table where an fp32 one takes
  over half a slice's DRAM (chat, serve)
 
 qwen35.EMBED_F32_MAX (2 GiB, half a 4 GiB card) kept Qwen3.5-2B's 1.9 GiB fp32 table, and at S > 1

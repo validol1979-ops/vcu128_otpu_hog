@@ -1292,3 +1292,20 @@ available ≥ 30 ГБ; при обрыве после синтеза (OOM) — �
   (S = 1) → 36,0 (S = 2) → 66,3 ток/с (S = 4). Логи `tmp/vcu128_search/isa_ref/*q2b_s4*`.
 - В работе: T2 (gpt-6-astra) — Gemma 4 на S = 2 / 4; сборка Р1 (HRD 64, Top/otpu_s4) `tmp/vcu128_r1`.
 
+- **Публичная копия обновлена (по запросу пользователя):** github.com/validol1979-ops/vcu128_otpu_hog `main`
+  4c3925f → **5bf6ecc** (один коммит-снимок 7b7316f без истории, автор validol1979-ops noreply; push — я,
+  gh validol1979-ops). Очистка по правилам 20.10: без автора / организации / локальных путей
+  (`<scratchpad>/`, `<xilinx>/`, `<docs>/`), без hog_tools, Hog — gitlab.com/hog-cern (db7af4f). Добавлено
+  `env/opentpu-patches/` (0001–0008, From: validol1979-ops), `env/setup_external.sh` собирает `patched/`;
+  README: два проекта Hog, окружение (PYTHONPATH patched, 20 passed). Проверки: поиск запрещённых строк
+  (текст, бинарные, PDF через pdftotext) — 0; наложение патчей фрагментом setup_external.sh на копии
+  upstream + test_otpu_eth 20 passed; анонимный клон: Hog db7af4f, Hog LIST — otpu, otpu_s4. Тег не ставил.
+  Рабочая копия публикации: `<xilinx>/tmp/public_github/{pub,new}`.
+- **Gemma 4 на нескольких слайсах** — патч 0009 (Codex gpt-6-astra; агента остановил SIGTERM на финальной
+  проверке, полный test_gemma4 + новые test_gemma4_slices прогнал сам: 69 passed, 4 skipped; матрица 39
+  passed). Автовыбор под 2 ГиБ слайса: PLE на хосте (на карте не помещается ни один вариант).
+- **Плата 07B2A8C (S = 4), gemma-4-E4B-it:** int8 / голова int8 — 16,0 ток/с (устр. 17,4; 11,5 Мтакт),
+  «The capital of France is Paris.»; **fp4 / голова fp4 — 28,7 ток/с** (устр. 28,9; 6,93 Мтакт), prefill
+  устр. 55,7, 128 токенов по-русски связно. На S = 1 (20.10) было 3,0 ток/с. **int8: ответ = ISA S = 4
+  бит-в-бит** (7 токенов, `tmp/vcu128_search/isa_ref/isa_gemma4_s4.log`); fp4 с ISA не сверялся. `chat_board.sh gemma`.
+

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Interactive chat with a model on the VCU128 over 40G (otpu_chat_eth.py, --backend board).
 #
-#   vcu128_otpu/tools/chat_board.sh [2b|4b|lfm2] [extra otpu-chat options]
+#   vcu128_otpu/tools/chat_board.sh [2b|4b|gemma|lfm2] [extra otpu-chat options]
 #   gnome-terminal -- vcu128_otpu/tools/chat_board.sh 4b      # in a window of its own
 #
 # Weights fp4, LM head int8 (Qwen3.5); the board is used by one program at a time. Context window
-# CAP tokens (default 32768: in HBM up to ~110k at S = 4; upstream's own default is 2048).
+# CAP tokens (default 32768: in HBM up to ~110k at S = 4; upstream's own default is 2048). A reply
+# runs to MAXNEW tokens (default the whole window: it stops at EOS or "context full"; upstream 1024).
 set -uo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd -- "$here/../.." && pwd)"
@@ -19,10 +20,11 @@ which="${1:-4b}"; shift || true
 case "$which" in
   2b)   args=(--model qwen35-2b --wformat fp4 --head-format int8) ;;
   4b)   args=(--model qwen35-4b --wformat fp4 --head-format int8) ;;
+  gemma) args=(--model gemma4-e4b --wformat fp4 --head-format fp4) ;;   # S = 2 / 4: patch 0009
   lfm2) args=(--model lfm2) ;;
-  *)    echo "model: 2b | 4b | lfm2" >&2; exit 2 ;;
+  *)    echo "model: 2b | 4b | gemma | lfm2" >&2; exit 2 ;;
 esac
-"$up/.venv/bin/python" "$here/otpu_chat_eth.py" "${args[@]}" --backend board --cap "${CAP:-32768}" "$@"
+"$up/.venv/bin/python" "$here/otpu_chat_eth.py" "${args[@]}" --backend board --cap "${CAP:-32768}" --max-new "${MAXNEW:-${CAP:-32768}}" "$@"
 status=$?
 read -rp "chat exited ($status); Enter closes the window " _
 exit $status

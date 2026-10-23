@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 10:21:37 +0300
-Subject: [PATCH 1/8] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per
+Subject: [PATCH 1/9] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per
  channel)
 
 The accelerator's read stream per channel is at most ARD beats per round trip

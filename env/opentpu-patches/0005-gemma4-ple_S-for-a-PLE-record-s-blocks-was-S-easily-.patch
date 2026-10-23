@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 11:32:57 +0300
-Subject: [PATCH 5/8] gemma4: ple_S for a PLE record's blocks (was S, easily
+Subject: [PATCH 5/9] gemma4: ple_S for a PLE record's blocks (was S, easily
  taken for the slice count)
 
 Descriptor field m.S / ns.S -> ple_S, _ple_records(..., S, ...) -> ple_S and its worker job; no behaviour

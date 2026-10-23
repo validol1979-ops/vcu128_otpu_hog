@@ -1,0 +1,829 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 13:23:51 +0300
+Subject: [PATCH 9/9] gemma4: Gemma 4 on S = 2 / 4 slices (Qwen3 sharding, KV
+ replication, per-slice fit)
+
+Spec.check allows S > 1 (n_kv % S == 0 or replicated KV heads, H / F / vocab per slice) and refuses
+multi-slice MoE, k_eq_v and differing global KV heads with a clear message. Image: per-slice q / KV
+(one head when replicated) / wo rows / F / vocab head shard, replicated embedding gather table and
+PLE projections, FFN padded to S x the down quantum; build returns S images; descriptors(sid) and every
+compile entry point trace each slice. Attention y = all_gather(dot(all_gather(o), wo_loc)) and MLP
+y = all_gather(swiglu_down(...)) before the sandwich norms; wpp sharded + all_gather. emulated_logits(S=);
+automatic format / PLE placement against the per-slice DRAM (E4B at S = 4, 2 GiB a slice: host int8 PLE,
+fp4 layers / head 1.1 GB a slice; every on-card PLE variant exceeds 2 GiB). layouts.head_parallel_indices.
+Tests: tests/test_gemma4_slices.py (tiny Gemma 4 at S = 2 / 4, int8 / fp4: resident == static, chunked
+prefill, cosine > 0.99 vs emulation, greedy == host, byte-identical KV replicas, host PLE, fit);
+tests/test_gemma4.py + slices 69 passed, 4 skipped; test_config_matrix 39 passed (S = 2 Gemma no longer
+refused). Codex gpt-6-astra (high), reviewed; full E4B on the card not yet run.
+
+diff --git a/opentpu/kernels/layouts.py b/opentpu/kernels/layouts.py
+index 74a3c230..e48f7e2d 100644
+--- a/opentpu/kernels/layouts.py
++++ b/opentpu/kernels/layouts.py
+@@ -7,6 +7,12 @@ def head_parallel_attention_weights(wq, wk, wv, wo, n_q_heads, n_kv_heads, d, S)
+     that slice owns (KV heads s, s+S, ... and their query groups), and the columns of wo follow
+     the slice-major order in which `attention_layer` all-gathers the head outputs. When
+     S > n_kv_heads, consecutive slices replicate a KV head and split its query group."""
++    qrows, kvrows = head_parallel_indices(n_q_heads, n_kv_heads, d, S)
++    return wq[qrows], wk[kvrows], wv[kvrows], wo[:, qrows]
++
++
++def head_parallel_indices(n_q_heads, n_kv_heads, d, S):
++    """Query and KV row order for slice-major head-parallel attention weights."""
+     G = n_q_heads // n_kv_heads
+     if n_kv_heads % S == 0:
+         kv_order = [h for s in range(S) for h in range(s, n_kv_heads, S)]
+@@ -20,4 +26,4 @@ def head_parallel_attention_weights(wq, wk, wv, wo, n_q_heads, n_kv_heads, d, S)
+                          "slices, or be a multiple of the slice count")
+     qrows = np.concatenate([np.arange(h * d, (h + 1) * d) for h in q_order])
+     kvrows = np.concatenate([np.arange(h * d, (h + 1) * d) for h in kv_order])
+-    return wq[qrows], wk[kvrows], wv[kvrows], wo[:, qrows]
++    return qrows, kvrows
+diff --git a/opentpu/llm/gemma4.py b/opentpu/llm/gemma4.py
+index 14798241..eb645fb8 100644
+--- a/opentpu/llm/gemma4.py
++++ b/opentpu/llm/gemma4.py
+@@ -55,7 +55,7 @@ Pieces:
+   load_weights      the checkpoint's language model as a lazy mapping of fp32 numpy arrays
+                     (HF names, model.language_model.* -> model.*); the PLE table as rows
+   reference_logits  plain numpy forward pass (the math, fp32)
+-  Image             per-slice DRAM layout (one slice) and its contents
++  Image             per-slice DRAM layout and its contents
+   gemma4_step       the ol kernel for one decode token (host inputs, or gathered on the device
+                     at a run-time position)
+   gemma4_rows       R consecutive prompt tokens per device run (chunked prefill)
+@@ -86,6 +86,7 @@ from ..isasim import Config
+ from ..kernels import gather as GA
+ from ..kernels import mailbox as MB
+ from ..kernels.attention import Additive, Blocks, Bucket, _attend_heads
++from ..kernels.layouts import head_parallel_indices
+ from ..kernels.lib import gelu_tanh, rmsnorm, rope
+ from ..kernels.mlp import _chunk, swiglu_down
+ from . import formats as FM
+@@ -234,7 +235,16 @@ class Spec:
+ 
+     def check(self, cfg: Config) -> None:
+         D = cfg.D
+-        need = [(cfg.S == 1, "one slice (a single KV head)"),
++        S = cfg.S
++        need = [(self.hidden % (S * D) == 0, "hidden % (S * D)"),
++                (self.n_q % S == 0, "n_q % S"),
++                (self.n_kv % S == 0 or S % self.n_kv == 0,
++                 "KV heads must divide S or be a multiple of S"),
++                (self.vocab % S == 0, "vocab % S"),
++                (S == 1 or not self.experts, "Gemma 4 MoE is supported only at S = 1"),
++                (S == 1 or not self.k_eq_v, "Gemma 4 k_eq_v is supported only at S = 1"),
++                (S == 1 or self.n_kv_global in (0, self.n_kv),
++                 "Gemma 4 n_kv_global != n_kv is supported only at S = 1"),
+                 (self.head_dim % D == 0 and self.global_head_dim % D == 0, "head dims % D"),
+                 (self.hidden % D == 0 and self.ple_dim % D == 0, "hidden, ple_dim % D"),
+                 (all(self.n_q % self.kvh(i) == 0 for i in range(self.layers)),
+@@ -515,11 +525,11 @@ def reference_logits(spec: Spec, W, tokens) -> np.ndarray:
+ def emulated_logits(spec: Spec, W, tokens, D: int = 128, wformat: str = "int8",
+                     head_format: str | None = None, ple_format: str = "int8",
+                     formats: str | None = None, routes: list | None = None,
+-                    routing: dict | None = None, tmem: int = 1 << 16) -> np.ndarray:
++                    routing: dict | None = None, tmem: int = 1 << 16, S: int = 1) -> np.ndarray:
+     """float64 decode with openTPU's quantization points and none of its rounding (as
+     qwen3.emulated_logits): weights in their formats (per layer: layer_formats, as Image; the
+     PLE projection with its H^-1/2 folded in), every MM input quantized as QACT does (the MLP's
+-    down projection's in its F chunks, Image.dchunk at a TMEM of `tmem` words; an expert's in
++    down projection's in its F/S chunks, Image.dchunk at a TMEM of `tmem` words; an expert's in
+     its slot's, moe.ExpertFormat), K (per token: ROW at d = D, else an offset per D-block) and
+     V (per token) as the cache holds them, P per attention block (V's scales folded in), the
+     embedding and PLE rows as the device gathers them (kernels/gather.py, bit for bit), the
+@@ -549,7 +559,7 @@ def emulated_logits(spec: Spec, W, tokens, D: int = 128, wformat: str = "int8",
+     if P:
+         cols = np.concatenate([np.arange(spec.src(i) * P, (spec.src(i) + 1) * P)
+                                for i in range(L)])
+-        S = GA.record_blocks(-(-L * P // D), ple_format)
++        ple_S = GA.record_blocks(-(-L * P // D), ple_format)
+         wp = W["model.per_layer_model_projection.weight"].reshape(-1, P, H)[
+             [spec.src(i) for i in range(L)]].reshape(-1, H)
+         wpq = _fake_w(np.asarray(wp, np.float32) * np.float32(H ** -0.5), D, pf)
+@@ -561,7 +571,7 @@ def emulated_logits(spec: Spec, W, tokens, D: int = 128, wformat: str = "int8",
+         if P:
+             pe = GA.dequant_records(GA.pack_records(
+                 np.asarray(W[Weights.PLE][[tk]], np.float32)[:, cols] * np.float32(
+-                    (P / 2) ** 0.5), ple_format, D, S), ple_format, D, S)[0, :L * P]
++                    (P / 2) ** 0.5), ple_format, D, ple_S), ple_format, D, ple_S)[0, :L * P]
+             pli = _norm((wpq @ _fake_q(x, D)).reshape(L, P), gpl, spec.eps) + \
+                 pe.reshape(L, P)
+         for i in range(L):
+@@ -593,12 +603,19 @@ def emulated_logits(spec: Spec, W, tokens, D: int = 128, wformat: str = "int8",
+             att = w(a + "o_proj.weight", fa) @ _fake_q(o.reshape(-1), D)
+             x = x + _norm(att, W[p + "post_attention_layernorm.weight"], spec.eps)
+             h = _fake_q(_norm(x, W[p + "pre_feedforward_layernorm.weight"], spec.eps), D)
+-            fp_ = _ffn_pad(spec.ffn[i], fd, D)
++            fp_ = _ffn_pad(spec.ffn[i], fd, D, S)
+             wd = w(p + "mlp.down_proj.weight", fd, fp_)
+             u = _gelu(w(p + "mlp.gate_proj.weight", fg) @ h) * \
+                 (w(p + "mlp.up_proj.weight", fg) @ h)
+-            m = wd @ _fake_q(np.pad(u, (0, fp_ - len(u))), D,
+-                             _mlp_chunk(fp_, D, D if fd == "int8" else 2 * D, tmem))
++            # The device visits chunk c of each slice before advancing to chunk c + 1.
++            f_loc = fp_ // S
++            C = _mlp_chunk(f_loc, D, D if fd == "int8" else 2 * D, tmem)
++            uq = _fake_q(np.pad(u, (0, fp_ - len(u))), D, C)
++            m = np.zeros(H)
++            for c0 in range(0, f_loc, C):
++                for sid in range(S):
++                    sl = slice(sid * f_loc + c0, sid * f_loc + c0 + C)
++                    m += wd[:, sl] @ uq[sl]
+             if spec.experts:
+                 xn = _norm(x, None, spec.eps)
+                 g2 = np.asarray(W[p + "pre_feedforward_layernorm_2.weight"], f64)
+@@ -674,11 +691,11 @@ def _fit_bytes(cfg: Config) -> int:
+     return min(cfg.DRAM_BYTES, CARD_BYTES)
+ 
+ 
+-def _ffn_pad(f: int, fd: str, D: int) -> int:
++def _ffn_pad(f: int, fd: str, D: int, S: int = 1) -> int:
+     """The MLP width a layer block holds: f rounded up to its down projection's column quantum
+-    (D for int8, 2D for 4-bit: 26B-A4B's 2112 -> 2176 / 2304), the gate / up rows and down
+-    columns past f zero (gelu_tanh(0) * 0 = 0: the same sums)."""
+-    q = D if fd == "int8" else 2 * D
++    per slice (S*D for int8, S*2D for 4-bit: at S=1, 26B-A4B's 2112 -> 2176 / 2304).
++    The gate / up rows and down columns past f are zero (gelu_tanh(0) * 0 = 0)."""
++    q = S * (D if fd == "int8" else 2 * D)
+     return -(-f // q) * q
+ 
+ 
+@@ -744,8 +761,9 @@ class _KV(KVDesc):
+     stride too, one argument word; sliding layers: their slot tpos * ps). A multi-row K append must go row by row (QST writes one row's scales after
+     the other's)."""
+ 
+-    def __init__(self, heads: dict, cap: int, d: int, D: int, ps: int):
+-        super().__init__(heads, cap, d, D, 1, 0)
++    def __init__(self, heads: dict, cap: int, d: int, D: int, ps: int,
++                 S: int = 1, sid: int = 0, rep: int = 1):
++        super().__init__(heads, cap, d, D, S, sid, rep=rep)
+         self.ps = ps
+ 
+     def k(self, h: int) -> QTensor:
+@@ -755,7 +773,7 @@ class _KV(KVDesc):
+ 
+ 
+ class Image:
+-    """Per-slice DRAM layout of a Gemma 4 model (one slice).
++    """Per-slice DRAM layout of a Gemma 4 model.
+ 
+     [ I/O: x, pe, rope rows | final norm | logits | per-layer inputs | mask rows ] [ PLE
+     projection ] [ layer blocks, run by run ] [ LM head ] [ PLE records ] [ lookup: RoPE rows,
+@@ -776,9 +794,10 @@ class Image:
+     writes before each run (host_rows; the records of the run's tokens, read from ple_store,
+     which build fills) and the gathers read at the row.
+     None for either (and OTPU_PLE_FORMAT / OTPU_PLE_HOST unset): the table on the card in int8
+-    if the image then fits 4 GiB, else in fp4, else on the host in int8. `formats` None (and
++    if the image fits the per-slice DRAM budget (at most 4 GiB), else in fp4, else on the host
++    in int8. `formats` None (and
+     OTPU_FORMATS unset): spec.formats, or, when it is empty, the layers are int8 and no PLE
+-    choice fits them in 4 GiB, spec.fit_formats (E4B: the head and gate / up 0-11 in fp4).
++    choice fits them in that budget, spec.fit_formats (E4B: the head and gate / up 0-11 in fp4).
+     `choices` holds what was chosen.
+     """
+ 
+@@ -786,8 +805,12 @@ class Image:
+                  wformat: str = "int8", head_format: str | None = None, lookup: bool = False,
+                  ple_format: str | None = None, block: int = ATTN_BLOCK,
+                  ple_host: bool | None = None, formats: str | None = None,
+-                 experts: int | None = None, prefill_rows: int | None = None):
++                 experts: int | None = None, prefill_rows: int | None = None,
++                 _fit_limit: int | None = None):
+         spec.check(cfg)
++        # Layout probes use large DRAM to measure an oversized image, but must choose
++        # formats / PLE against the caller's real per-slice budget (e.g. S=4's 2 GiB).
++        fit_limit = _fit_bytes(cfg) if _fit_limit is None else _fit_limit
+         if batch != 1:
+             raise ValueError("Gemma 4 runs one sequence: batch=1")
+         if cap % block:
+@@ -801,7 +824,7 @@ class Image:
+             if not formats and wformat == "int8" and spec.fit_formats and \
+                     Image(spec, replace(cfg, DRAM_BYTES=1 << 40), cap, 1, rows, wformat,
+                           head_format, lookup, ple_format, block, ple_host,
+-                          "", experts).nbytes > _fit_bytes(cfg):
++                          "", experts, prefill_rows, _fit_limit=fit_limit).nbytes > fit_limit:
+                 formats = spec.fit_formats  # int8 layers do not fit beside any PLE choice
+         if ple_format is None:
+             ple_format = os.environ.get("OTPU_PLE_FORMAT")
+@@ -816,7 +839,7 @@ class Image:
+             for ple_format, ple_host in opts:           # the first that fits (else the last)
+                 if Image(spec, replace(cfg, DRAM_BYTES=1 << 40), cap, 1, rows, wformat,
+                          head_format, lookup, ple_format, block, ple_host,
+-                         formats, experts).nbytes <= _fit_bytes(cfg):
++                         formats, experts, prefill_rows, _fit_limit=fit_limit).nbytes <= fit_limit:
+                     break
+         self.ple_host = bool(ple_host)
+         D, H, P, L = cfg.D, spec.hidden, spec.ple_dim, spec.layers
+@@ -835,7 +858,12 @@ class Image:
+         self.choices = dict(formats=formats, ple_format=ple_format, ple_host=self.ple_host,
+                             head_format=self.head_format)
+         rb = lambda k, f: Q.row_bytes(k, f, D)                          # noqa: E731
+-        self.v_loc = spec.vocab
++        S = cfg.S
++        self.rep = max(1, S // spec.n_kv)
++        self.nq_loc, self.nkv_loc = spec.n_q // S, max(1, spec.n_kv // S)
++        self.h_loc, self.v_loc = H // S, spec.vocab // S
++        self.f_loc = tuple(_ffn_pad(f, fd, D, S) // S
++                           for f, (_, _, fd, _) in zip(spec.ffn, self.lf))
+         self.ring = min(cap, spec.window + RING_BLOCKS * block)         # sliding cache slots
+         hs, hg, rot = spec.head_dim, spec.global_head_dim, spec.global_rot
+         self.rw = hs + 2 * rot                  # a RoPE row: cos, sin (sliding), cos, sin (global)
+@@ -864,7 +892,7 @@ class Image:
+                    "g_pln": b.alloc(4 * P)}
+         from .prefill import tile_scratch   # a tiled run's attention outputs, a part at a time
+         if tile_scratch(spec, layer_runs=True):     # (tiled.py; a MoE image's: opt-in)
+-            self.io["o"] = b.alloc(4 * cfg.act_rows * spec.n_q * max(hs, hg))
++            self.io["o"] = b.alloc(4 * cfg.act_rows * self.nq_loc * max(hs, hg))
+         if self.ple_host:           # the generate loop's requests for the next token's record
+             self.io["ple_mbox"] = b.alloc(RowLayout.WORDS)
+         if self.prefill_rows:       # its residual stream, and moe_ffn_rows' outputs (a
+@@ -875,7 +903,7 @@ class Image:
+         self.wproj = (b.alloc(L * P * rb(H, self.pformat)), b.alloc(L * P * sb(H, self.pformat))) \
+             if P else None
+         # layer blocks: one layout per key
+-        self.dchunk = {(f, fd): _mlp_chunk(_ffn_pad(f, fd, D), D, D if fd == "int8" else 2 * D,
++        self.dchunk = {(f, fd): _mlp_chunk(_ffn_pad(f, fd, D, S) // S, D, D if fd == "int8" else 2 * D,
+                                            cfg.TMEM_WORDS)
+                        for f, (_, _, fd, _) in zip(spec.ffn, self.lf)}
+         self.bofs, self.bsize = {}, {}
+@@ -892,11 +920,12 @@ class Image:
+             if mo:                  # moe_ffn's input norm (ones: the router's gains are
+                 o["g_post"], o["gbase"] = lb.alloc(4 * H), lb.alloc(4)      # folded), j * E,
+                 o["router"] = (lb.alloc(mo.E * H), lb.alloc(mo.E * sb(H, "int8")))  # int8
+-            fp_ = _ffn_pad(ff, fd, D)
+-            mats = {"wq": (nq, H, fa), "wo": (H, nq, fa), "wg": (fp_, H, fg), "wu": (fp_, H, fg)}
++            fp_ = _ffn_pad(ff, fd, D, S)
++            mats = {"wq": (nq // S, H, fa), "wo": (self.h_loc, nq, fa),
++                    "wg": (fp_ // S, H, fg), "wu": (fp_ // S, H, fg)}
+             if P:
+-                mats.update(wpg=(P, H, fp), wpp=(H, P, fp))
+-            nkv = spec.kvh(i)
++                mats.update(wpg=(P, H, fp), wpp=(self.h_loc, P, fp))
++            nkv = max(1, spec.kvh(i) // S)
+             if own:
+                 o["kn"] = lb.alloc(4 * d)
+                 mats.update(wk=(nkv * d, H, fa))
+@@ -905,7 +934,7 @@ class Image:
+             for n, (r, c, f) in mats.items():
+                 o[n] = (lb.alloc(r * rb(c, f)), lb.alloc(r * sb(c, f)))
+             C = self.dchunk[ff, fd]
+-            o["wd"] = [(lb.alloc(H * rb(C, fd)), lb.alloc(H * sb(C, fd)))
++            o["wd"] = [(lb.alloc(self.h_loc * rb(C, fd)), lb.alloc(self.h_loc * sb(C, fd)))
+                        for _ in range(fp_ // C)]
+             if own:
+                 ck = self.ring if kind == SLIDE else cap
+@@ -936,8 +965,10 @@ class Image:
+                 for e in range(len(unit)):
+                     self.loc[first + it * len(unit) + e] = (base, us, it, offs[e])
+             b.next = base + reps * us
+-        self.head = (b.alloc(spec.vocab * Q.row_bytes(H, self.head_format, D)),
+-                     b.alloc(spec.vocab * sb(H, self.head_format)))
++        self.head = (b.alloc(self.v_loc * Q.row_bytes(H, self.head_format, D)),
++                     b.alloc(self.v_loc * sb(H, self.head_format)))
++        # Every slice gathers arbitrary tokens; at S > 1 it needs a full table of its own.
++        self.embed = b.alloc(spec.vocab * rb(H, self.head_format)) if S > 1 else self.head[0]
+         # the head's gather scales (kernels.gather.table: the embedding rows' gathers)
+         self.head_gs = b.alloc(spec.vocab * Q.gather_scale_bytes(H, self.head_format, D))
+         self.ple = b.alloc((rows if self.ple_host else spec.vocab) * self.ple_rec)
+@@ -979,7 +1010,7 @@ class Image:
+     def _kv_bytes(self, i: int) -> int:
+         d = self.spec.hd(i)
+         ck = self.ring if self.spec.kinds[i] == SLIDE else self.cap
+-        return self.spec.kvh(i) * ck * (self.ks[self.spec.kinds[i]] + d + 4)
++        return max(1, self.spec.kvh(i) // self.cfg.S) * ck * (self.ks[self.spec.kinds[i]] + d + 4)
+ 
+     def _off(self, li, it=None) -> Affine:
+         """The block address of layer li (static), or of element li of its run's unit at
+@@ -993,6 +1024,9 @@ class Image:
+         are quantized by `jobs` worker processes (default: opentpu.qcache.build_jobs(),
+         OTPU_BUILD_JOBS, else the host's CPUs) when W is a checkpoint's Weights, the 4-bit ones
+         through opentpu.qcache (_job)."""
++        return [self._build_slice(W, sid, jobs) for sid in range(self.cfg.S)]
++
++    def _build_slice(self, W, sid: int, jobs: int | None) -> np.ndarray:
+         spec, cfg = self.spec, self.cfg
+         D, H, P, L = cfg.D, spec.hidden, spec.ple_dim, spec.layers
+         self._W = W                                     # host_inputs gathers its rows
+@@ -1038,32 +1072,53 @@ class Image:
+                    "wpp": p + "per_layer_projection", "wk": a + "k_proj", "wv": a + "v_proj"}
+             if k[1]:
+                 put(base + o["kn"], f32(W[a + "k_norm.weight"]))
+-            for n, (r, _, f) in o["mats"].items():     # gate / up: rows padded with zeros
+-                sel = ("pad", r) if n in ("wg", "wu") and r != spec.ffn[i] else None
++            qrows, kvrows = head_parallel_indices(spec.n_q, spec.kvh(i), spec.hd(i), cfg.S)
++            for n, (r, _, f) in o["mats"].items():
++                if n == "wq":
++                    sel = ("rows", tuple(qrows[sid * r:(sid + 1) * r]))
++                elif n in ("wk", "wv"):
++                    sel = ("rows", tuple(kvrows[sid * r:(sid + 1) * r]))
++                elif n == "wo":
++                    sel = ("shard", sid * r, (sid + 1) * r, tuple(qrows))
++                elif n in ("wg", "wu", "wpp"):
++                    sel = ("shard", sid * r, (sid + 1) * r, None)
++                else:
++                    sel = None
+                 tasks.append((tuple(base + x for x in o[n]),
+                               ("mat", src[n] + ".weight", sel, 1.0, f, D)))
+             fd = self.lf[i][2]
+             C = self.dchunk[k[2], fd]               # whole rows, stored in column parts
+             tasks.append((tuple(base + x for pair in o["wd"] for x in pair),
+                           ("parts", p + "mlp.down_proj.weight",
+-                           ("cols", 0, C * len(o["wd"])), 1.0, fd, D, C)))
++                           ("down", sid * self.h_loc, (sid + 1) * self.h_loc,
++                            C * len(o["wd"])), 1.0, fd, D, C)))
+         head = "model.embed_tokens.weight" if spec.tied else "lm_head.weight"
+         hf = self.head_format
+         rb, sb, gb = (Q.row_bytes(H, hf, D), Q.scale_bytes(H, hf, D),
+                       Q.gather_scale_bytes(H, hf, D))
+         for r in range(0, spec.vocab, HEAD_CHUNK):
+             e = min(spec.vocab, r + HEAD_CHUNK)
+-            tasks.append(((self.head[0] + r * rb, self.head[1] + r * sb, self.head_gs + r * gb),
++            tasks.append(((self.embed + r * rb, None if cfg.S > 1 else self.head[1] + r * sb,
++                           self.head_gs + r * gb),
+                           ("gather", head, ("rowrange", r, e), 1.0, hf, D)))
+-        if self.ple_host:                               # the host's store: record t at t rec
++        if cfg.S > 1:
++            for r in range(0, self.v_loc, HEAD_CHUNK):
++                e = min(self.v_loc, r + HEAD_CHUNK)
++                tasks.append(((self.head[0] + r * rb, self.head[1] + r * sb),
++                              ("mat", head, ("rowrange", sid * self.v_loc + r,
++                                             sid * self.v_loc + e), 1.0, hf, D)))
++        if self.ple_host and sid == 0:              # one host store serves every slice
+             self.ple_store = np.zeros((spec.vocab, self.ple_rec), np.uint8)
+-        for r in range(0, spec.vocab if P else 0, PLE_CHUNK):
++        ple_rows = spec.vocab if P and (not self.ple_host or sid == 0) else 0
++        for r in range(0, ple_rows, PLE_CHUNK):
+             e = min(spec.vocab, r + PLE_CHUNK)
+             tasks.append(((-1 - r if self.ple_host else self.ple + r * self.ple_rec,),
+                           ("ple", Weights.PLE, ("rowrange", r, e), tuple(self._cols()),
+                            self.ple_format, D, self.ple_S, (P / 2) ** 0.5)))
+         for (addrs, _), arrays in zip(tasks, _run_tasks(W, [t for _, t in tasks], jobs)):
+             for addr, arr in zip(addrs, arrays):
++                if addr is None:
++                    continue
+                 if addr < 0:                            # PLE records from row -1 - addr
+                     v = np.ascontiguousarray(arr).view(np.uint8).reshape(-1, self.ple_rec)
+                     self.ple_store[-1 - addr:-1 - addr + len(v)] = v
+@@ -1080,8 +1135,8 @@ class Image:
+                                                  amask_table(self.block, lk["amask_M"], True)]))
+             for f, addr in lk["onehot"].items():
+                 put(addr, GA.onehot(D, cfg.MCOLS, "int8" if f == "int8" else "fp4"))
+-            G.build(lambda s, addr, a: put(addr, a), 0, 1, spec, self.cap, lk["gen"])
+-        return [img]
++            G.build(lambda s, addr, a: put(addr, a), sid, cfg.S, spec, self.cap, lk["gen"])
++        return img
+ 
+     def _cols(self) -> np.ndarray:
+         """The columns of the checkpoint's PLE table that this model's layers read."""
+@@ -1178,6 +1233,21 @@ class Image:
+         return self.ring - self.spec.window + 1
+ 
+     # ---- programs
++    def _compile(self, kernel, bound, fit: bool = False):
++        """Trace every slice with the same run-argument ABI."""
++        def abi(ra):
++            return [(v.name, v.bound, c) for v, c in ra]
++
++        programs, args = [], None
++        for sid in range(self.cfg.S):
++            b = trace_fit(kernel, self.cfg, sid, lambda: bound(sid)) if fit else \
++                kernel.trace(self.cfg, sid, bound(sid))
++            programs.append(b.finish())
++            if args is not None and abi(args) != abi(b.run_args):
++                raise CompileError("Gemma 4 slices have different run arguments")
++            args = list(b.run_args)
++        return programs, args
++
+     def compile_decode(self, blocks: int, lo: int, block: int = ATTN_BLOCK):
+         """(programs, run_args): gemma4_step at a run-time position (qwen3.RunPos; the image
+         needs lookup=True): the token's rows gathered on the device."""
+@@ -1189,9 +1259,8 @@ class Image:
+         if not (blocks - 1) * block <= lo < min(blocks * block, self.cap):
+             raise ValueError(f"lo {lo} is not in bucket {blocks}")
+         rp = RunPos(blocks, block, lo, 0, self.cap)
+-        b = trace_fit(gemma4_step, self.cfg, 0, lambda: {"m": step_descriptors(self, 0),
+-                                                          "pos": rp, "block": block})
+-        return [b.finish()], list(b.run_args)
++        return self._compile(gemma4_step, lambda sid: {"m": step_descriptors(self, sid),
++                                                       "pos": rp, "block": block}, fit=True)
+ 
+     def compile_layer_run(self, li: int, blocks: int, block: int = ATTN_BLOCK, R: int = 1,
+                           embedded: bool = False, hint: bool = False, em: bool = False):
+@@ -1217,23 +1286,18 @@ class Image:
+         rp.tpos.bound -= R - 1          # the run's last row in the block too: tpos <= block - R
+         row = RunVar("row", self.prefill_rows)
+         if li < 0:
+-            b = gemma4_embed_run.trace(self.cfg, 0, {"m": self.descriptors(0), "pos": rp,
+-                                                     "row": row, "em": em})
+-        else:
+-            b = gemma4_layer_run.trace(self.cfg, 0, {"m": self.descriptors(0), "li": li,
+-                                                     "pos": rp, "row": row, "block": block,
+-                                                     "R": R, "embedded": embedded,
+-                                                     "hint": hint, "em": em})
+-        return [b.finish()], list(b.run_args)
++            return self._compile(gemma4_embed_run, lambda sid: {
++                "m": self.descriptors(sid), "pos": rp, "row": row, "em": em})
++        return self._compile(gemma4_layer_run, lambda sid: {
++            "m": self.descriptors(sid), "li": li, "pos": rp, "row": row, "block": block,
++            "R": R, "embedded": embedded, "hint": hint, "em": em})
+ 
+     def compile_prefill_head(self, em: bool = False):
+         """(programs, run_args): gemma4_prefill_head at a run-time row ("row"); em: from the
+         expert-major records, after the last layer's end."""
+         from ..compiler import RunVar
+-        b = gemma4_prefill_head.trace(self.cfg, 0, {"m": self.descriptors(0),
+-                                                    "row": RunVar("row", self.prefill_rows),
+-                                                    "em": em})
+-        return [b.finish()], list(b.run_args)
++        return self._compile(gemma4_prefill_head, lambda sid: {
++            "m": self.descriptors(sid), "row": RunVar("row", self.prefill_rows), "em": em})
+ 
+     def compile_expert_run(self, li: int, C: int | None = None):
+         """(programs, run_args): moe.moe_expert_run of layer li (expert-major, docs/offload.md
+@@ -1268,15 +1332,15 @@ class Image:
+         return G.compile_generate(self, gemma4_step, blocks, lo, block, chain, samp, debug, part)
+ 
+     def compile_step(self, pos: int, block: int = ATTN_BLOCK, tok: int | None = None) -> list:
+-        """One program: the decode token at position `pos`; its inputs from the host
++        """One program per slice: the decode token at position `pos`; its inputs from the host
+         (host_inputs), or with `tok` (lookup tables) gathered on the device."""
+         return self.compile_rows([(0, pos)], [0], block, None if tok is None else [tok],
+                                  fill=getattr(self, "stream_fill", False))
+ 
+     def compile_rows(self, rows, logit_rows, block: int = ATTN_BLOCK, tokens=None,
+                      fill: bool = False) -> list:
+-        """One program: consecutive positions of the sequence at once; their inputs from the
+-        host (host_inputs), or with `tokens` (their ids, compiled in; lookup tables) gathered
++        """One program per slice: consecutive positions of the sequence at once; inputs from
++        the host (host_inputs), or with `tokens` (their ids, compiled in; lookup tables) gathered
+         and loaded on the device. fill: a streamed decode step's (compile_step: fill_logits
+         first)."""
+         if self.spec.experts and len(rows) > 1:
+@@ -1295,14 +1359,12 @@ class Image:
+             if len(tokens) != len(rows):
+                 raise ValueError(f"{len(tokens)} tokens for {len(rows)} rows")
+             kw["tokens"] = [int(t) for t in tokens]
+-        def bound():
+-            m = self.descriptors(0)
++        def bound(sid):
++            m = self.descriptors(sid)
+             m.fill = bool(fill)
+             return {"m": m, "pos": [p for _, p in rows], "logit_rows": list(logit_rows),
+                     "block": block, **kw}
+-        if len(rows) == 1:          # a decode step: placed best-fit where next-fit fails
+-            return [trace_fit(gemma4_step, self.cfg, 0, bound).finish()]
+-        return [gemma4_step.trace(self.cfg, 0, bound()).finish()]
++        return self._compile(gemma4_step, bound, fit=len(rows) == 1)[0]
+ 
+     def compile_prompt_run(self, blocks: int, R: int, kind: str, block: int = ATTN_BLOCK):
+         """gemma4_prompt_run's (programs, run_args) (docs/prefill.md): R rows of a prompt at a
+@@ -1323,9 +1385,8 @@ class Image:
+         lk = self.lookup
+         amask = (lk["amask"], 4 * lk["amask_M"] * (block + 1)) if "amask" in lk else None
+         pos = RunRows(blocks, block, (blocks - 1) * block, 0, self.cap, R, 0, amask)
+-        b = gemma4_prompt_run.trace(self.cfg, 0, {"m": self.descriptors(0), "pos": pos, "R": R,
+-                                                  "kind": kind, "block": block})
+-        return [b.finish()], list(b.run_args)
++        return self._compile(gemma4_prompt_run, lambda sid: {
++            "m": self.descriptors(sid), "pos": pos, "R": R, "kind": kind, "block": block})
+ 
+     @property
+     def prompt_host_rows(self) -> bool:
+@@ -1340,8 +1401,9 @@ class Image:
+         def kv(li, off):
+             d, o = spec.hd(li), self.bofs[self._key(li)]
+             ck = self.ring if spec.kinds[li] == SLIDE else self.cap
+-            return _KV({j: {n: off + v for n, v in e.items()} for j, e in enumerate(o["kv"])},
+-                       ck, d, D, self.ks[spec.kinds[li]])
++            return _KV({sid // self.rep + j * cfg.S: {n: off + v for n, v in e.items()}
++                        for j, e in enumerate(o["kv"])},
++                       ck, d, D, self.ks[spec.kinds[li]], cfg.S, sid, self.rep)
+ 
+         def layer(li, it=None, jt=None):
+             """Descriptors of layer li (static), or of the layer at li's place in its run's
+@@ -1363,8 +1425,9 @@ class Image:
+                 da, sa = o[n]
+                 setattr(ns, n, QTensor.weight(off + da, off + sa, r, c, f, D))
+             C = self.dchunk[ff, fd]
+-            parts = tuple(QTensor.weight(off + da, off + sa, H, C, fd, D) for da, sa in o["wd"])
+-            ns.wd = QTensor(parts[0].data, parts[0].scale, (H, C * len(parts)), parts[0].rs,
++            parts = tuple(QTensor.weight(off + da, off + sa, self.h_loc, C, fd, D)
++                          for da, sa in o["wd"])
++            ns.wd = QTensor(parts[0].data, parts[0].scale, (self.h_loc, C * len(parts)), parts[0].rs,
+                             parts[0].srs, D, parts=parts, pw=C, wf=parts[0].wf)
+             if own:
+                 ns.kn = Tensor(off + o["kn"], (d,), (1,))
+@@ -1398,14 +1461,14 @@ class Image:
+             logits=_tdesc(self.io["logits"], (1, spec.vocab)),
+             logitsr=_tdesc(self.io["logits"], (R, spec.vocab)),
+             oscr=_tdesc(self.io["o"], (self.cfg.act_rows,
+-                                       spec.n_q * max(spec.head_dim, spec.global_head_dim)))
++                                       self.nq_loc * max(spec.head_dim, spec.global_head_dim)))
+             if "o" in self.io else None,
+             pli=_tdesc(self.io["pli"], (R, L, P)),
+             mask=_tdesc(self.io["mask"], (2, self.block)), z2=self.io["z2"],
+             xbuf=_tdesc(self.io["xbuf"], (self.prefill_rows, H)) if self.prefill_rows else None,
+             wproj=_qdesc(*self.wproj, L * P, H, D, self.pformat) if P else None,
+-            head=_qdesc(*self.head, spec.vocab, H, D, self.head_format), v_loc=spec.vocab,
+-            head_tab=GA.table(self.head[0], self.head_gs, spec.vocab, H, self.head_format, D),
++            head=_qdesc(*self.head, self.v_loc, H, D, self.head_format), v_loc=self.v_loc,
++            head_tab=GA.table(self.embed, self.head_gs, spec.vocab, H, self.head_format, D),
+             ple=GA.record_table(self.ple, R if self.ple_host else spec.vocab, self.ple_S,
+                                 self.ple_format, D) if P else None)
+         if self.lookup:
+@@ -1466,6 +1529,13 @@ def _job_matrix(W, name, sel, scale) -> np.ndarray:
+             a = _Rows(f, n)[sel[1]:sel[2]]
+         else:
+             a = np.asarray(W[name], np.float32)[sel[1]:sel[2]]
++    elif sel[0] in ("shard", "down"):
++        a = _job_matrix(W, name, ("rowrange", sel[1], sel[2]), 1.0)
++        a = np.pad(a, ((0, sel[2] - sel[1] - len(a)), (0, 0)))
++        if sel[0] == "down":
++            a = np.pad(a, ((0, 0), (0, sel[3] - a.shape[1])))
++        elif sel[3] is not None:
++            a = a[:, list(sel[3])]
+     elif sel[0] == "rows":
+         a = np.asarray(W[name], np.float32)[list(sel[1])]
+     elif sel[0] == "pad":                   # the first sel[1] rows, zeros past the tensor's
+@@ -1607,7 +1677,9 @@ def _attention(x, lw, m, pos, ropes, block: int):
+     V is the K projection, normed without a weight (K: with k_norm, then RoPE'd)."""
+     spec = m.spec
+     R, d, nkv, eps = x.rows, lw.hd, lw.nkv, spec.eps
+-    G = spec.n_q // nkv
++    G = spec.n_q // nkv // lw.kv.rep
++    heads = list(lw.kv.owned_heads(nkv))
++    nkv = len(heads)
+     c0, nr = (0, spec.head_dim // 2) if lw.kind == SLIDE else (spec.head_dim, spec.global_rot)
+ 
+     def cos_sin(r):
+@@ -1627,7 +1699,7 @@ def _attention(x, lw, m, pos, ropes, block: int):
+             vr = rmsnorm(v[r, :].reshape(nkv, d), None, eps)
+             slot = _slot(m, lw.kind, pos[r] if isinstance(pos, list) else pos)
+             for j in range(nkv):
+-                ol.kv_append(kv, j, slot, kr[j:j + 1, :], vr[j:j + 1, :])
++                ol.kv_append(kv, heads[j], slot, kr[j:j + 1, :], vr[j:j + 1, :])
+         del k, v, kr, vr, kn
+     del xs
+     qn = ol.load(lw.qn)
+@@ -1638,7 +1710,7 @@ def _attention(x, lw, m, pos, ropes, block: int):
+     Qs, ent = [], []
+     for r in range(R):
+         c, s_ = cos_sin(r)
+-        qr = o[r, :].reshape(spec.n_q, d)
++        qr = o[r, :].reshape(nkv * G, d)
+         Qs.append(_rope(rmsnorm(qr, qn, eps), c, s_, qr))
+         pr = pos[r] if isinstance(pos, list) else pos
+         seq = (_slide_seq if lw.kind == SLIDE else _full_seq)(m, pr, block)
+@@ -1651,10 +1723,11 @@ def _attention(x, lw, m, pos, ropes, block: int):
+         o[r, (j * G + g0) * d:(j * G + g1) * d].reshape(g1 - g0, d).set(acc / l[:, None])
+ 
+     _attend_heads([Qs[r][j * G + g0:j * G + g1, :] for r, j, g0, g1, _ in ent], kv,
+-                  [j for _, j, _, _, _ in ent], [e[4] for e in ent], block, ol.LOG2E,
++                  [heads[j] for _, j, _, _, _ in ent], [e[4] for e in ent], block, ol.LOG2E,
+                   depth=ATTN_DEPTH, emit=emit)
+     del Qs
+-    y = ol.dot(o, lw.wo)                                    # [R, H]
++    # The sandwich norm needs the whole hidden row on every slice.
++    y = ol.all_gather(ol.dot(ol.all_gather(o), lw.wo))         # [R, H]
+     del o
+     _add_norm(x, y, ol.load(lw.g_attn), eps)
+ 
+@@ -1675,7 +1748,7 @@ def _add_norm(x, y, g, eps, scale=None):
+ def _dense(x, lw, spec):
+     """The dense MLP of norm(x)."""
+     xs = ol.quantize(rmsnorm(x, ol.load(lw.g_pre), spec.eps))
+-    return swiglu_down(xs, lw.wg, lw.wu, lw.wd, chunk=lw.wd.pw, act=gelu_tanh)
++    return ol.all_gather(swiglu_down(xs, lw.wg, lw.wu, lw.wd, chunk=lw.wd.pw, act=gelu_tanh))
+ 
+ 
+ def _mlp(x, lw, spec, m=None):
+@@ -1728,7 +1801,7 @@ def _em_end(x, lw, spec, m, row):
+ def _ple(x, lw, spec):
+     """The per-layer input: x + norm(W_p (gelu_tanh(W_g x) * pli)), then x layer_scalar."""
+     g = gelu_tanh(ol.dot(x, lw.wpg)) * ol.load(lw.pli[0:x.rows, :])     # [R, P]
+-    y = ol.dot(g, lw.wpp)                                   # [R, H]
++    y = ol.all_gather(ol.dot(g, lw.wpp))                     # [R, H]
+     del g
+     _add_norm(x, y, ol.load(lw.g_ple), spec.eps, ol.load(lw.ls))
+ 
+diff --git a/tests/test_config_matrix.py b/tests/test_config_matrix.py
+index 8377d74f..0610f2a3 100644
+--- a/tests/test_config_matrix.py
++++ b/tests/test_config_matrix.py
+@@ -122,7 +122,9 @@ def _tiny(name):
+         import tempfile
+ 
+         import test_gemma4
+-        _, W, spec = test_gemma4._model(Path(tempfile.mkdtemp()))
++        # Keep own and shared sliding/global layers within the design target's 16 MiB.
++        s, f = test_gemma4.S_, test_gemma4.F_
++        _, W, spec = test_gemma4._model(Path(tempfile.mkdtemp()), (s, s, f, s, f), shared=2)
+         return W, spec
+     from test_autodecode import _tiny as tiny
+     return tiny(name)
+@@ -141,8 +143,7 @@ def _model(models, name):
+ 
+ # (model, arch) -> what its image says where the model does not map onto it
+ REFUSED = {("qwen35", SMALL): "DeltaNet on the VPU.*inner dimension exceeds ACT RAM",
+-           ("gemma4", SMALL): "inner dimension exceeds ACT RAM",
+-           ("gemma4", "bcu1525"): "one slice", ("gemma4", "design"): "one slice"}
++           ("gemma4", SMALL): "inner dimension exceeds ACT RAM"}
+ CAP = 384           # (Gemma 4: 512, a multiple of its attention block)
+ 
+ 
+diff --git a/tests/test_gemma4.py b/tests/test_gemma4.py
+index ee7c6745..5f326df0 100644
+--- a/tests/test_gemma4.py
++++ b/tests/test_gemma4.py
+@@ -37,13 +37,13 @@ def _cos(a, b):
+     return (a * b).sum(-1) / np.linalg.norm(a, axis=-1) / np.linalg.norm(b, axis=-1)
+ 
+ 
+-def _model(d, kinds=KINDS, shared=3):
++def _model(d, kinds=KINDS, shared=3, hidden=256, ffn=512, n_kv=1):
+     """A tiny random Gemma 4 of these layer kinds, the last `shared` reading earlier layers'
+     K / V: (HF model, weights, Spec), its config.json in d."""
+     torch.manual_seed(0)
+     hc = transformers.Gemma4TextConfig(
+-        hidden_size=256, num_hidden_layers=len(kinds), num_attention_heads=8,
+-        num_key_value_heads=1, head_dim=128, global_head_dim=256, intermediate_size=512,
++        hidden_size=hidden, num_hidden_layers=len(kinds), num_attention_heads=8,
++        num_key_value_heads=n_kv, head_dim=128, global_head_dim=256, intermediate_size=ffn,
+         vocab_size=1000, vocab_size_per_layer_input=1000, hidden_size_per_layer_input=128,
+         layer_types=list(kinds), num_kv_shared_layers=shared, use_double_wide_mlp=True,
+         sliding_window=512, final_logit_softcapping=30.0, max_position_embeddings=4096)
+@@ -149,10 +149,8 @@ def checkpoint(d: Path, **kw) -> Path:
+ 
+ 
+ def test_otpu_chat_on_the_isa_simulator(tmp_path, monkeypatch, capfd):
+-    """otpu-chat --backend isa (the default) on a Gemma 4 checkpoint (checkpoint()): the
+-    simulators' default configuration is the design's two slices, onto which Gemma 4 (one KV
+-    head) does not map (Image refused it: "one slice"), so the chat runs in the card's
+-    configuration (board.sim_config); a one-shot reply."""
++    """otpu-chat --backend isa (the default) on a Gemma 4 checkpoint (checkpoint()): a
++    one-shot reply in the card's configuration (board.sim_config)."""
+     import sys
+ 
+     from opentpu.host import chat as C
+@@ -652,13 +650,14 @@ def test_ple_rows_served_during_a_live_cards_runs(tiny, monkeypatch):
+                                                                   # else a fence never holds
+ 
+ 
+-def test_one_sequence_one_slice(tiny):
++def test_one_sequence_and_slice_constraints(tiny):
+     _, W, spec = tiny
+     with pytest.raises(ValueError, match="one sequence"):
+         Engine(spec, W, cap=256, cfg=_cfg(), batch=2)
+-    from opentpu.isasim import design_config
+-    with pytest.raises(ValueError, match="one slice"):
+-        spec.image(design_config(), 256)
++    img = spec.image(replace(_cfg(), S=2), 256)
++    assert img.rep == 2 and img.nq_loc == spec.n_q // 2
++    with pytest.raises(ValueError, match="hidden %"):
++        spec.image(replace(_cfg(), S=4), 256)
+     # whole attention blocks only (the sliding ring and the global layers' masked block):
+     # a capacity of 384 (a multiple of D) is refused, not run past the cache
+     with pytest.raises(ValueError, match="multiple of the attention block"):
+diff --git a/tests/test_gemma4_slices.py b/tests/test_gemma4_slices.py
+new file mode 100644
+index 00000000..b055dd79
+--- /dev/null
++++ b/tests/test_gemma4_slices.py
+@@ -0,0 +1,135 @@
++"""Gemma 4's head-parallel attention, replicated KV and sandwich norms across slices."""
++from dataclasses import replace
++
++import numpy as np
++import pytest
++
++from opentpu.llm import gemma4 as G
++from opentpu.llm.qwen3 import Engine
++from test_gemma4 import _model, _cfg, _cos, S_, F_
++
++
++@pytest.fixture(scope="module", params=[1, 2])
++def tiny_slices(request, tmp_path_factory):
++    return _model(tmp_path_factory.mktemp("gemma4-slices"),
++                  (S_, S_, F_, S_, F_), shared=2, hidden=512, ffn=1024, n_kv=request.param)
++
++
++def _replicas(eng):
++    img = eng.image
++    if img.rep == 1:
++        return
++    for li in range(img.spec.layers):
++        if img.spec.kv_src[li] != li:
++            continue
++        for s in range(img.cfg.S):
++            kv = img.descriptors(s).layer(li).kv
++            peer = img.descriptors(s ^ 1).layer(li).kv
++            h = s // img.rep
++            assert list(kv.owned_heads(img.spec.n_kv)) == [h]
++            for name, size in (("k", kv.cap * kv.ps), ("vt", kv.d * kv.cap),
++                               ("vs", 4 * kv.cap)):
++                a, b = kv.heads[h][name].static(), peer.heads[h][name].static()
++                assert np.array_equal(eng.backend.read(s, a, size),
++                                      eng.backend.read(s ^ 1, b, size)), (li, s, name)
++
++
++@pytest.mark.parametrize("S", [2, 4])
++@pytest.mark.parametrize("fmt", ["int8", "fp4"])
++def test_slices(tiny_slices, S, fmt, monkeypatch):
++    monkeypatch.setenv("OTPU_PLE_FORMAT", fmt)
++    monkeypatch.setenv("OTPU_PLE_HOST", "0")
++    _, W, spec = tiny_slices
++    cfg = replace(_cfg(), S=S)
++    kw = dict(cap=1024, cfg=cfg, wformat=fmt)
++    a, b = Engine(spec, W, resident=True, **kw), Engine(spec, W, **kw)
++    toks = [int(t) for t in np.random.default_rng(6).integers(0, 1000, 12)]
++    dev = np.array([b.step(t) for t in toks])
++    emu = G.emulated_logits(spec, W, toks, S=S, wformat=fmt, ple_format=fmt)
++    assert _cos(G.softcap(spec, dev), G.softcap(spec, emu)).min() > 0.99
++    assert a.resident
++    for t, want in zip(toks[:3], dev[:3]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    assert np.array_equal(a.prefill(toks[3:9], chunk=4).view(np.uint32), dev[8].view(np.uint32))
++    for t, want in zip(toks[9:], dev[9:]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    _replicas(a)
++    _replicas(b)
++    t0 = int(np.argmax(dev[-1]))
++    t, ref = t0, []
++    for _ in range(4):
++        t = int(np.argmax(b.step(t)))
++        ref.append(t)
++    assert a.can_generate and a.generate_card(t0, 4, stop_ids=[]) == ref
++    _replicas(a)
++
++
++@pytest.mark.parametrize("change,message", [
++    ({"experts": 4}, "MoE"), ({"k_eq_v": True}, "k_eq_v"),
++    ({"n_kv_global": 4}, "n_kv_global"), ({"hidden": 384}, "hidden"),
++    ({"n_q": 6}, "n_q"), ({"n_kv": 3}, "KV heads"), ({"vocab": 999}, "vocab"),
++])
++def test_unsupported(tiny_slices, change, message):
++    with pytest.raises(ValueError, match=message):
++        replace(tiny_slices[2], **change).check(replace(_cfg(), S=4))
++
++
++@pytest.mark.parametrize("fmt", ["int8", "fp4"])
++def test_padded_round_robin(tmp_path, fmt):
++    """Two KV heads per slice in round-robin order; F needs padding to S*q."""
++    _, W, spec = _model(tmp_path, (S_, F_), shared=0, hidden=512, ffn=1030, n_kv=4)
++    cfg = replace(_cfg(), S=2)
++    eng = Engine(spec, W, cap=512, cfg=cfg, wformat=fmt)
++    toks = [5, 300, 777]
++    dev = np.array([eng.step(t) for t in toks])
++    emu = G.emulated_logits(spec, W, toks, S=2, wformat=fmt)
++    assert _cos(G.softcap(spec, dev), G.softcap(spec, emu)).min() > 0.99
++    for sid in range(2):
++        assert list(eng.image.descriptors(sid).layer(0).kv.owned_heads(4)) == [sid, sid + 2]
++
++
++def test_host_ple_and_prompt_runs(tmp_path, monkeypatch):
++    """The PLE server broadcasts records during generation, and prompt runs gather every slice."""
++    _, W, spec = _model(tmp_path, (S_, F_), shared=0, hidden=512, ffn=1024, n_kv=2)
++    cfg = replace(_cfg(), S=4)
++    kw = dict(cap=512, cfg=cfg, resident=True, wformat="fp4", head_format="int8",
++              prompt_runs=True)
++    monkeypatch.setenv("OTPU_PLE_FORMAT", "int8")
++    monkeypatch.setenv("OTPU_PLE_HOST", "0")
++    a = Engine(spec, W, **kw)
++    monkeypatch.setenv("OTPU_PLE_HOST", "1")
++    b = Engine(spec, W, **kw)
++    toks = [5, 17, 300, 999, 12, 800]
++    dev = np.array([a.step(t) for t in toks])
++    assert b.image.ple_host and b.row_server is not None
++    assert np.array_equal(b.prefill(toks).view(np.uint32), dev[-1].view(np.uint32))
++    assert b._prompt_progs
++    _replicas(b)
++    t0 = int(np.argmax(dev[-1]))
++    t, ref = t0, []
++    for _ in range(4):
++        t = int(np.argmax(a.step(t)))
++        ref.append(t)
++    assert b.generate_card(t0, 4, stop_ids=[]) == ref
++    _replicas(b)
++
++
++def test_layer_run_entry_points(tiny_slices):
++    """The dense layer-major entry points also emit a program for every slice."""
++    spec = replace(tiny_slices[2], ple_dim=0)
++    img = spec.image(replace(_cfg(), S=4), 512, lookup=True, prefill_rows=8)
++    for progs, args in (img.compile_layer_run(-1, 1), img.compile_layer_run(0, 1, R=2),
++                        img.compile_prefill_head()):
++        assert len(progs) == 4 and any(v.name == "row" for v, _ in args)
++
++
++@pytest.mark.parametrize("S", [2, 4])
++def test_fit_uses_per_slice_budget(tiny_slices, S, monkeypatch):
++    """Try host PLE against actual DRAM before unnecessarily changing int8 weight formats."""
++    for key in ("OTPU_FORMATS", "OTPU_PLE_FORMAT", "OTPU_PLE_HOST"):
++        monkeypatch.delenv(key, raising=False)
++    spec = tiny_slices[2]
++    cfg = replace(_cfg(), S=S)
++    host = spec.image(cfg, 512, lookup=True, ple_host=True, formats="")
++    img = spec.image(replace(cfg, DRAM_BYTES=host.nbytes), 512, lookup=True)
++    assert img.formats == "" and img.ple_host and img.nbytes == host.nbytes

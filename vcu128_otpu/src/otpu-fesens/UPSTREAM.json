@@ -10,43 +10,48 @@
   "local_patches": [
     {
       "file": "patches/0001-otpu_bcu_sys-ARD-parameter-otpu_mem_ch-read-credits-.patch",
-      "subject": "[PATCH 1/8] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per channel)",
-      "sha256": "574fc007ddd617d272ad15726840d98fa8f3587f402bcc2b8423480a22edd70b"
+      "subject": "[PATCH 1/9] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per channel)",
+      "sha256": "0697f4cbf2d2c02f96e807d42a1b732ef3c5ee97e7bf44794a0d5d2ee00e2482"
     },
     {
       "file": "patches/0002-chat-backend-isa-in-OTPU_TARGET-s-configuration-the-.patch",
-      "subject": "[PATCH 2/8] chat: --backend isa in OTPU_TARGET's configuration; the configuration in the log",
-      "sha256": "ffe5896a499f73bfb05d6a692340e0243958cebf55d3453fc04b3e13de97bd0f"
+      "subject": "[PATCH 2/9] chat: --backend isa in OTPU_TARGET's configuration; the configuration in the log",
+      "sha256": "94adbd3d29f936e23db210579fb0650fe08c2457f45a3062ecd6412a4474fbf4"
     },
     {
       "file": "patches/0003-otpu_bcu_sys-MXU_E-parameter-the-MXU-s-epilogue-lane.patch",
-      "subject": "[PATCH 3/8] otpu_bcu_sys: MXU_E parameter (the MXU's epilogue lanes) to otpu_board",
-      "sha256": "cd208b8d518a1f08f6bb228601b1db30fc380b622202329d91d21056441d2191"
+      "subject": "[PATCH 3/9] otpu_bcu_sys: MXU_E parameter (the MXU's epilogue lanes) to otpu_board",
+      "sha256": "9210792ecf241511a6a33b9d4f03370fbd7d5546412a30812e71defa58337c1f"
     },
     {
       "file": "patches/0004-otpu_board-CH_LOG2-otpu_bcu_sys-SLL-per-channel-at-a.patch",
-      "subject": "[PATCH 4/8] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at any S, SLL2 (two SLR crossings), CH_LOG2",
-      "sha256": "691a07b215f700126ad6f7e354eb46f9768e842a4a5200fcbba327faa400581c"
+      "subject": "[PATCH 4/9] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at any S, SLL2 (two SLR crossings), CH_LOG2",
+      "sha256": "a8cd17a333211ce5ec20ba66b87c11592d3911c38f293b84ec2dd3d4ad13e099"
     },
     {
       "file": "patches/0005-gemma4-ple_S-for-a-PLE-record-s-blocks-was-S-easily-.patch",
-      "subject": "[PATCH 5/8] gemma4: ple_S for a PLE record's blocks (was S, easily taken for the slice count)",
-      "sha256": "ca63babe5a75fd2962df918434e26f9214e20700317db4d329fe9cb0fe0d6b75"
+      "subject": "[PATCH 5/9] gemma4: ple_S for a PLE record's blocks (was S, easily taken for the slice count)",
+      "sha256": "9ac1796b8f0e76c23829fc9cdf90bd5ae7c0b709364bbbcb3f3330580f5019c3"
     },
     {
       "file": "patches/0006-offload-BackendDram-writes-every-slice-host-row-mail.patch",
-      "subject": "[PATCH 6/8] offload: BackendDram writes every slice (host row mailboxes at S > 1)",
-      "sha256": "23a9e2d401961573fc409f5dd8b1f8a538b77aa38227ab67475b1cc0fdfbf349"
+      "subject": "[PATCH 6/9] offload: BackendDram writes every slice (host row mailboxes at S > 1)",
+      "sha256": "99cf98ce4602fd871338aa8b138a61352c21fdad96dcb56b783479c395135742"
     },
     {
       "file": "patches/0007-KV-head-replication-for-n_kv-S-KVDesc-rep-Qwen3-Qwen.patch",
-      "subject": "[PATCH 7/8] KV-head replication for n_kv < S (KVDesc rep): Qwen3 / Qwen3.5 / LFM2 at S > n_kv",
-      "sha256": "58cd260ed5751db4136d014d2f2764487e32cee640bd2c8d620454c2cf457e2e"
+      "subject": "[PATCH 7/9] KV-head replication for n_kv < S (KVDesc rep): Qwen3 / Qwen3.5 / LFM2 at S > n_kv",
+      "sha256": "5ca9e858ad0533f7f6c9d5c31ea9c6c926bfa13ef2151b75ca18e6cdec4bddf1"
     },
     {
       "file": "patches/0008-fit_embed-int8-embedding-table-where-an-fp32-one-tak.patch",
-      "subject": "[PATCH 8/8] fit_embed: int8 embedding table where an fp32 one takes over half a slice's DRAM (chat, serve)",
-      "sha256": "32dc2770df6d9a964abadd07c2542ab3d8dc0e71fb207ebeda81a957b865e53e"
+      "subject": "[PATCH 8/9] fit_embed: int8 embedding table where an fp32 one takes over half a slice's DRAM (chat, serve)",
+      "sha256": "51a58184bb526904c2303c912a866b79a2608b2729813cc3ff9135e6c68aabe8"
+    },
+    {
+      "file": "patches/0009-gemma4-Gemma-4-on-S-2-4-slices-Qwen3-sharding-KV-rep.patch",
+      "subject": "[PATCH 9/9] gemma4: Gemma 4 on S = 2 / 4 slices (Qwen3 sharding, KV replication, per-slice fit)",
+      "sha256": "9519b4e5594eb1e331043a67e377f720c66f50b7d417ef5f6d0458d62ac48760"
     }
   ]
 }
