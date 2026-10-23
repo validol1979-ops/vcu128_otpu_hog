@@ -5,7 +5,8 @@
 #   src/lib/verilog-axi/syn/vivado/axil_cdc.tcl (the 40G bridge's AXI-Lite into core_clk).
 # As upstream (boards/bcu1525/constraints/bcu1525_top.tcl): no clock pair is declared
 # asynchronous, which would take priority over otpu_mem_ch's set_max_delay -datapath_only.
-# Clocks: core_clk and uclk from one MMCM (related), eth_clk (l_ethernet tx_clk_out),
+# Clocks: core_clk (200 MHz), uclk and clk100 (HBM APB, l_ethernet dclk) from one MMCM
+# (related), eth_clk (l_ethernet tx_clk_out),
 # the HBM and GT internals (IP constraints).
 
 proc vcu128_sync_to {pattern} {
@@ -24,9 +25,10 @@ vcu128_sync_to {link_s1_reg*}            ;# 40G status into eth_clk (eth40_regs 
 vcu128_sync_to {led_s1_reg*}             ;# HBM status into core_clk (LEDs)
 vcu128_sync_to {calib_u1_reg*}           ;# HBM calibration (APB clock) into uclk
 vcu128_sync_to {u_eth_mgmt/rx_sync_reg[0]} ;# stat_rx_status into core_clk
+vcu128_sync_to {u_sys/u_board/cal_s1_reg*} ;# HBM calibration (APB clk100) into core_clk (otpu_board)
 
 # Reset synchronizers released after the MMCM lock (asynchronous assertion)
-foreach r {core_rst_sync_reg* u_rst_sync_reg*} {
+foreach r {core_rst_sync_reg* u_rst_sync_reg* r100_rst_sync_reg*} {
     set c [get_cells -quiet -hier -filter "NAME =~ $r"]
     if {[llength $c]} { set_false_path -to [get_pins -of_objects $c -filter {REF_PIN_NAME == PRE || REF_PIN_NAME == CLR}] }
 }

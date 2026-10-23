@@ -5,7 +5,7 @@
 
 Запуск (нужен импорт upstream opentpu):
     cd vcu128_otpu/tools
-    PYTHONPATH=../../../external/rtl/opentpu-fesens/upstream \\
+    PYTHONPATH=../../../external/rtl/opentpu-fesens/patched \\
         ../../../external/rtl/opentpu-fesens/.venv/bin/python -m pytest -q test_otpu_eth.py
 """
 from __future__ import annotations
@@ -122,6 +122,37 @@ def test_no_board(fast):
         t.reg_read(0)
     t.close()
     s.close()
+
+
+def test_read_window_auto(monkeypatch):
+    """read_window=None — по фактическому SO_RCVBUF (Linux возвращает удвоенное значение,
+    под данные — половина): 208 КиБ по умолчанию → 2 запроса по 96 КиБ, 64 МиБ → 8
+    (READ_WINDOW_MAX), малый буфер → 2; явное значение не меняется; read_req округляется
+    к кадру до выбора."""
+    def mk(**kw):
+        return E.EthTransport("127.0.0.1", 9, fast=False, **kw)    # connect UDP без обмена
+
+    with mk() as t:                                     # фактический буфер этой машины
+        rcv = t.msock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) // 2
+        assert t.read_window == max(2, min(E.READ_WINDOW_MAX, rcv // t.read_req))
+    with mk(read_window=5) as t:
+        assert t.read_window == 5
+    with mk(bufsize=4096) as t:
+        assert t.read_window == 2
+
+    real = socket.socket.getsockopt
+    for rcvbuf, req, frame, want in [(2 * 212992, 96 << 10, E.MAXW, 2),
+                                     (2 * (64 << 20), 96 << 10, E.MAXW, 8),
+                                     (2 * 4608, 96 << 10, E.MAXW, 2),
+                                     (2 * 212992, 40000, 8192, 6),   # 40000 → 32768
+                                     (2 * 212992, 1000, 64, 8)]:
+        def fake(self, level, opt, *a, _v=rcvbuf):
+            if (level, opt) == (socket.SOL_SOCKET, socket.SO_RCVBUF) and not a:
+                return _v
+            return real(self, level, opt, *a)
+        monkeypatch.setattr(socket.socket, "getsockopt", fake)
+        with mk(read_req=req, frame=frame) as t:
+            assert (t.read_req, t.read_window) == (max(frame, req // frame * frame), want)
 
 
 # ------------------------------------------------------------------------------ регистры
@@ -289,3 +320,89 @@ def test_host_throughput_loopback(capsys):
         stop.value = 1
         th.join(2)
         s.close()
+
+
+# ------------------------------------------------------------------------------ термоконтроль
+class _LocalRegs(M.MemRegs):
+    """MemRegs с моделью термоконтроля как транспорт (без сети)."""
+
+    def reg_read_many(self, offs):
+        return [self.reg_read(o) for o in offs]
+
+
+def test_thermal_model():
+    """otpu_temp поверх модели ThermalRegs: чтение, пороги, HOLD и возврат, защёлки, максимумы."""
+    import otpu_temp as T
+    t = _LocalRegs(nch=1, ch_bytes=64)
+    th = t.thermal
+    d = T.read(t)
+    assert [round(s["temp_c"]) for s in d["slr"]] == [41, 44, 42]
+    assert [h["temp_c"] for h in d["hbm"]] == [35, 36]
+    assert d["fpga_lim"] == {"warn": 85, "alarm": 100, "hyst": 10}
+    assert d["hbm_lim"] == {"warn": 85, "alarm": 95, "hyst": 5}
+    assert d["ctrl"] == {"act": True, "auto": False, "cattrip": True, "force": False}
+    assert not d["status"]["hold"] and d["status"]["valid"] and d["status"]["cool"]
+    assert abs(d["r_temp_c"] - 43.5) < 0.1 and "SLR2" in T.format_report(d)
+    th.slr_c[2] = 101.0
+    d = T.read(t)
+    assert d["status"]["hold"] and d["alarm_sensors"] == ["SLR2"] and th.ctl_writes == [0]
+    assert d["board_status"] >> 21 & 1 and "УДЕРЖАНО" in T.format_report(d)
+    th.slr_c[2] = 92.0
+    T.set_ctrl(t, resume=True)                       # не остыло ниже 100 - 10
+    assert T.read(t)["status"]["hold"]
+    th.slr_c[2] = 89.0
+    assert T.read(t)["status"]["hold"]               # без AUTO_RESUME держит
+    T.set_ctrl(t, resume=True)
+    d = T.read(t)
+    assert not d["status"]["hold"] and d["status"]["hold_l"] and d["holds"] == 1
+    assert abs(d["slr"][2]["max_c"] - 101) < 0.1
+    T.set_ctrl(t, clear=True, clear_max=True)
+    d = T.read(t)
+    assert not d["status"]["alarm_l"] and abs(d["slr"][2]["max_c"] - 89) < 0.1
+    T.set_limits(t, fpga=(70, 80, 5), hbm=(60, 70, 3))
+    d = T.read(t)
+    assert d["fpga_lim"] == {"warn": 70, "alarm": 80, "hyst": 5} and d["status"]["hold"]
+    assert set(d["alarm_sensors"]) == {"SLR2"} and "SLR0" not in d["warn_sensors"]
+    T.set_ctrl(t, act=False)                         # без действия: удержание снимается
+    d = T.read(t)
+    assert not d["status"]["hold"] and d["status"]["alarm"] and not d["ctrl"]["act"]
+    with pytest.raises(ValueError):
+        T.set_limits(t, fpga=(85, 130, 10))
+    th.hbm_cattrip[1] = True
+    T.set_ctrl(t, act=True)
+    d = T.read(t)
+    assert d["status"]["cattrip"] and d["status"]["hold"]
+    assert d["board_status"] >> 3 & 3 == 2
+
+
+def test_thermal_over_eth(emu_clean, capsys):
+    """otpu_temp.main по EthTransport (эмулятор с ThermalRegs): JSON и установка порогов."""
+    import json
+    import otpu_temp as T
+    t = transport(emu_clean, True)
+    try:
+        assert T.main(["--fpga", "80", "95", "5", "--auto", "on", "--json"], transport=t) == 0
+        d = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert d["fpga_lim"] == {"warn": 80, "alarm": 95, "hyst": 5} and d["ctrl"]["auto"]
+        assert T.main(["--watch", "0.01", "--count", "2"], transport=t) == 0
+        assert capsys.readouterr().out.count("Термоконтроль") == 2
+        T.main(["--fpga", "85", "100", "10", "--auto", "off"], transport=t)
+    finally:
+        t.close()
+
+
+def test_board_info_temp_c(monkeypatch):
+    """Board.info по коду SYSMONE4: с install_target (EthTransport ставит её сам) temp_c —
+    по формуле UltraScale+ для platform_id 3 (vcu128.toml), а не XADC 7-series."""
+    B = _upstream()
+    from opentpu.host import regs as R
+    from opentpu.host.fake import FakeTransport
+    import otpu_temp as T
+    monkeypatch.setenv("OTPU_TARGET", str(E.TARGET_TOML))
+    code = M.ThermalRegs.code12(45.0)
+    assert E.install_target()
+    i = B.Board(FakeTransport(devname=None, regmap=4, temp_code=code), lock=False).info()
+    assert i["cfg"]["platform"] == E.PLATFORM_ID
+    assert abs(i["temp_c"] - 45.0) < 0.15, i["temp_c"]
+    assert abs(R.temp_c(code, "xilinxus") - T.code_to_c(code)) < 1e-9
+    assert abs(R.temp_c(code) - 45.0) > 3            # формула XADC дала бы другое

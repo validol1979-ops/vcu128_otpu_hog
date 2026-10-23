@@ -1,0 +1,17 @@
+# VCU128 openTPU: восстановление 40G после загрузки ПК (tools/host/install.sh).
+# ethtool speed/autoneg off (mlx4 иначе падает на 10G), MTU не ниже OTPU_MTU,
+# дополнительный адрес OTPU_ADDR без изменения профилей NetworkManager.
+[Unit]
+Description=VCU128 openTPU 40G host port (ethtool + address)
+Wants=network-online.target
+After=network-online.target NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/otpu-host-40g
+ExecStart=/usr/local/sbin/otpu-host-40g apply
+ExecStop=/usr/local/sbin/otpu-host-40g remove
+
+[Install]
+WantedBy=multi-user.target

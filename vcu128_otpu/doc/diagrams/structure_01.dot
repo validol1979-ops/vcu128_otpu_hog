@@ -1,0 +1,31 @@
+digraph G {
+graph [rankdir=TB, nodesep=0.65, ranksep=1, pad=0.3, fontname="DejaVu Sans", label="01 Platform", labelloc=t, fontsize=24];
+node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"];
+edge [fontname="DejaVu Sans", fontsize=10, color="#3d6a8b"];
+host [label="ПК\nTokenizer / compiler / Board API\nEthTransport",fillcolor="#fff1d6"];
+mac [label="QSFP1 / GTY quad 135\n40G MAC + PCS\nAXIS 256 bit",fillcolor="#dceeff"];
+bridge [label="otpu_eth_bridge\nUDP / SEQ / retry cache\nAXI4 DMA + AXI-Lite",fillcolor="#dceeff"];
+ereg [label="eth40_regs\n0x50000\nLink / RX / TX counters",fillcolor="#fff0d9"];
+cdc [label="axil_cdc\neth_clk → core_clk",fillcolor="#fff0d9"];
+jtag [label="jtag_axi_0\nDebug master",fillcolor="#fff0d9"];
+xbar [label="vcu128_axil_xbar\n2 masters / 3 windows",fillcolor="#fff0d9"];
+regs [label="Platform / MAC init\n0x40000 / 0x60000",fillcolor="#fff0d9"];
+board [label="otpu_bcu_sys / otpu_board\notpu_ctrl + trace + otpu_top\nS=1 slice, core=100 MHz",fillcolor="#e3edf9"];
+memch [label="otpu_mem_ch ×2\nCore / host arbitration, RMW\nCDC core / xclk / uclk",fillcolor="#def2e9"];
+port [label="otpu_hbm_port ×2\nRAW / WAR / WAW, RD / WD\n64-byte beats → AXI3",fillcolor="#def2e9"];
+hbm [label="hbm_0 / HBM2\n4 active AXI3 ports, 256 bit\n8 GiB physical / 4 GiB mapped",fillcolor="#def2e9"];
+clock [label="Clock / reset\nQDR4 100 → core100, uclk225 MHz\nDDR4 100 → HBM reference",fillcolor="#fff0d9"];
+host -> mac [label="40G DAC, UDP",style=solid];
+mac -> bridge [label="AXIS RX / TX",style=solid];
+bridge -> ereg [label="AXI-Lite",style=dashed];
+bridge -> cdc [label="AXI-Lite",style=dashed];
+cdc -> xbar [label="core_clk",style=dashed];
+jtag -> xbar [label="AXI-Lite",style=dashed];
+xbar -> regs [label="control / status",style=dashed];
+xbar -> board [label="0x00000, load / run",style=dashed];
+bridge -> memch [label="AXI4 DMA 128 bit / channel",style=solid];
+board -> memch [label="native reads / writes",style=solid];
+memch -> port [label="2 native ports / channel",style=solid];
+port -> hbm [label="AXI3 256 bit, 225 MHz",style=solid];
+clock -> board [label="clock / reset",style=dashed];
+}

@@ -1,0 +1,5 @@
+# VCU128 openTPU: параметры порта 40G ПК (tools/host/install.sh, otpu-host-40g.service).
+OTPU_IFACE=enp8s0d1
+OTPU_ADDR=192.168.41.1/24
+OTPU_SPEED=40000
+OTPU_MTU=9000

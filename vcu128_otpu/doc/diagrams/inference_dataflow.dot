@@ -1,0 +1,66 @@
+// Data paths of decode on the VCU128: PC -> 40G -> HBM, and inside the openTPU slice.
+// Edge labels: the instruction that moves the data (upstream docs/isa.md, rtl/top/otpu_slice.sv).
+// Render: dot -Tsvg inference_dataflow.dot -o inference_dataflow.svg (also -Tpdf).
+digraph inference {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=11, nodesep=0.45, ranksep=0.55, newrank=true,
+         label="openTPU на VCU128: пути данных инференса (S=1, D=128, MCOLS=4, LANES=8)\nсплошные — данные, пунктир — управление; на рёбрах — инструкция ISA",
+         labelloc=t];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eef3f8",
+        color="#396484"];
+  edge [fontname="Helvetica", fontsize=9, color="#396484"];
+
+  subgraph cluster_pc {
+    label="ПК (Python, upstream opentpu + EthTransport)"; style="rounded,dashed"; color="#888888";
+    host [label="Engine / Board\nкомпилятор, образ весов,\nпрограммы ISA, выборка токена", fillcolor="#fff4d6"];
+  }
+  subgraph cluster_board {
+    label="VCU128"; style="rounded"; color="#888888";
+    eth [label="QSFP1 40G → l_ethernet\n→ otpu_eth_bridge (UDP, eth_clk)", fillcolor="#e6f4ea"];
+    ctl [label="otpu_ctrl (s_ctl 0x00000)\nCTRL / STATUS / ARG0..7\nсчётчики, буфер трассы", fillcolor="#e6f4ea"];
+    memch [label="otpu_mem_ch ×2\nCDC xclk / core / uclk\nарбитраж хост ↔ ядро", fillcolor="#e6f4ea"];
+    hbmport [label="otpu_hbm_port ×2\nbeat 64 B → AXI3 2×256 bit\nхеш по 8 псевдоканалам", fillcolor="#e6f4ea"];
+    hbm [label="HBM2: каналы 0 и 1 (по 2 GiB)\nвеса · KV · программы · I/O · логиты", fillcolor="#ffe3d6"];
+
+    subgraph cluster_slice {
+      label="otpu_slice (core_clk 100 МГц)"; style="rounded,filled"; fillcolor="#fafcff"; color="#396484";
+      seq [label="SEQ + IMEM\nокно 16 инструкций,\nтабло зависимостей", fillcolor="#f0e6ff"];
+      portb [label="порт B\n128 B/такт", shape=cds, fillcolor="#ffe3d6"];
+      porta [label="порт A\nстроки масштабов 32 B", shape=cds, fillcolor="#ffe3d6"];
+      portsw [label="порт SW\n32 бит/такт", shape=cds, fillcolor="#ffe3d6"];
+      dma [label="DMA"];
+      mxu [label="MXU\n4 колонки × 128 INT8\nFIFO чанков 1024×128 B\nэпилог FP32"];
+      act [label="ACT RAM\n4 строки × 128 блоков × 128 B\nINT8 + масштабы"];
+      quant [label="QUANT\n8 FP32/такт, 2 прохода"];
+      vpu [label="VPU (+ SE)\n8 полос FP32\nexp2 / recip / rsqrt / Σ"];
+      tmem [label="TMEM\n65536 × FP32 = 256 KiB\n8 банков", fillcolor="#dff0ff"];
+    }
+  }
+
+  host -> eth [label="UDP: WRITE / READ / REG\n(до 8 KiB на кадр)", dir=both];
+  eth -> memch [label="AXI4 128 bit\n(загрузка весов, чтение логитов)", dir=both];
+  eth -> ctl [label="AXI-Lite: RUN, ARG, опрос HALTED", style=dashed];
+  memch -> hbmport [dir=both];
+  hbmport -> hbm [label="4 порта AXI3, uclk 225 МГц", dir=both];
+  hbm -> portb [label="native, 2 канала\nчередование по 64 B", dir=both];
+  hbm -> porta;
+  portsw -> hbm;
+  ctl -> seq [label="RUN / загрузка IMEM", style=dashed];
+  portb -> seq [label="загрузчик программ", style=dashed];
+  seq -> {dma mxu quant vpu} [style=dashed, color="#8a63c6"];
+
+  portb -> dma [label="LD"];
+  dma -> portb [label="ST (логиты)"];
+  dma -> tmem [label="LD: x, cos, sin, нормы"];
+  tmem -> dma [label="ST"];
+  portb -> mxu [label="MM: строки весов,\nK-кэш, Vᵀ-тайлы", color="#d77b12", penwidth=2.2];
+  porta -> mxu [label="MM: Sw, dw / масштабы K", color="#d77b12"];
+  act -> mxu [label="MM: стационарный\nоперанд (M ≤ 4 строк)", color="#d77b12", penwidth=2.2];
+  mxu -> tmem [label="MM: FP32, ≤ 2 слова/такт", color="#d77b12", penwidth=2.2];
+  tmem -> mxu [label="ACC / ASCALE", style=dotted, color="#d77b12"];
+  tmem -> quant [label="QACT / QST", color="#2b8a3e"];
+  quant -> act [label="QACT: INT8 + Sa", color="#2b8a3e", penwidth=2.2];
+  quant -> portsw [label="QST: K, Vᵀ + масштаб", color="#2b8a3e", penwidth=2.2];
+  tmem -> vpu [label="VOP", color="#1971c2"];
+  vpu -> tmem [label="VOP", color="#1971c2"];
+  dma -> vpu [label="DSTEP / STREAM\n(Qwen3.5 DeltaNet)", style=dotted];
+}

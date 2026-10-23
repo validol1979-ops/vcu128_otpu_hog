@@ -1,0 +1,87 @@
+// Structure of one openTPU slice (upstream rtl/top/otpu_slice.sv) at the VCU128 configuration.
+// Render: dot -Tsvg slice_structure.dot -o slice_structure.svg (and -Tpdf).
+digraph slice {
+  graph [rankdir=TB, newrank=true, fontname="Helvetica", fontsize=12, nodesep=0.35, ranksep=0.45,
+         labelloc=t, compound=true,
+         label="Слайс openTPU (otpu_slice) на VCU128: S=1, D=128, MCOLS=4, LANES=8, WIN=16, core_clk 100 МГц\nсплошные — данные (ширина / такт), пунктир — управление"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=9.5];
+  edge [fontname="Helvetica", fontsize=8.5, color="#396484"];
+
+  ctrl [label="otpu_ctrl (s_ctl 0x00000)\nCTRL: RUN / LOAD / CLEAR · ARG0..7\nSTATUS · счётчики · буфер трассы", fillcolor="#e6f4ea"];
+  coll [label="otpu_coll (общий на S слайсов)\nBAR · GATHER: сегменты слайсов →\nTMEM всех слайсов", fillcolor="#e6f4ea"];
+  dram [label="память слайса: otpu_native_dram\n2 канала (beat 64 B, чередование + CHASH)\n→ otpu_mem_ch ×2 → otpu_hbm_port ×2 → HBM", fillcolor="#ffe3d6"];
+
+  subgraph cluster_slice {
+    label="otpu_slice"; style="rounded,filled"; fillcolor="#fbfcfe"; color="#396484";
+
+    subgraph cluster_seq {
+      label="SEQ — otpu_seq"; style="rounded"; color="#8a63c6";
+      loader [label="загрузчик программы\nHBM → IMEM, 1 чанк = 4 инстр./такт\n(старт и HALT CHAIN)", fillcolor="#f0e6ff"];
+      imem [label="IMEM 4096 инструкций × 256 бит\nчтение на такт вперёд", fillcolor="#f0e6ff"];
+      dec [label="выборка + декод: 1 инстр./такт\nR0..R15, LI / ADDI / LOOP (до 4 уровней)\nw1..w3 += R[ra..rc]", fillcolor="#f0e6ff"];
+      win [label="окно WIN = 16 + табло\nотпечатки диапазонов TMEM / HBM / ACT\nRAW / WAR / WAW → старт самой старой готовой", fillcolor="#f0e6ff"];
+    }
+
+    dma [label="DMA — otpu_dma\nLD / ST: чанк 128 B ↔ 8 слов FP32/такт\nбуфер LD 128 чанков · WAITW · DSTEP/STREAM"];
+
+    subgraph cluster_mxu {
+      label="MXU — otpu_mxu (2 команды в работе)"; style="rounded"; color="#d77b12";
+      iss [label="issuer (ustart)\nзапросы N×KB чанков + строк масштабов", fillcolor="#fff0e0"];
+      cfifo [label="FIFO чанков\n1024 × 128 B", fillcolor="#fff0e0"];
+      sfifo [label="FIFO масштабов\nSw, dw по блокам", fillcolor="#fff0e0"];
+      arr [label="систолический массив (urel)\n4 колонки × 128 INT8·INT8\nцепочки DSP48E2 по 16 · точная целая сумма", fillcolor="#fff0e0"];
+      epi [label="FIFO результатов → эпилог, 2 полосы\ni2f · ×Sw · ×Sa·2⁻¹⁶ · ACC / ASCALE / RMAX", fillcolor="#fff0e0"];
+    }
+
+    act [label="ACT RAM — otpu_actram\n4 строки × 128 блоков × 128 B INT8\n+ {da, Sa} на (строку, блок)", fillcolor="#fff4d6"];
+    quant [label="QUANT — otpu_quant\n8 FP32/такт, 2 прохода (max → коды)\nбуфер строки 1024 чанка · CSCALE / RSCALE", fillcolor="#e9f7ec"];
+    vpu [label="VPU — otpu_vpu\n8 полос FP32 (простые) + составные\n(exp2, recip, rsqrt, log2) · дерево редукции\nSE: хвост stream engine (DeltaNet)", fillcolor="#e7f0ff"];
+
+    subgraph cluster_tmem {
+      label="TMEM — otpu_tmem"; style="rounded"; color="#1971c2";
+      arb [label="арбитр банков (каждый такт, всё-или-ничего)\nприоритет: DMA > COLL > VPU > MXU drain > QUANT", fillcolor="#dff0ff"];
+      tm [label="65536 × FP32 = 256 KiB, 8 банков (адрес mod 8)\nна FPGA — копия на каждый порт чтения\n8 портов чтения: MXU, DMA, Q, VA, VB, Q2, Q3, COLL\n4 порта записи: DMA, MXU, COLL, VPU", fillcolor="#dff0ff"];
+    }
+
+    portb [label="порт B\n128 B/такт (1024 бит)\nDMA, затем поток MXU, загрузчик", shape=cds, fillcolor="#ffe3d6"];
+    porta [label="порт A\nстроки 32 B\nмасштабы MXU", shape=cds, fillcolor="#ffe3d6"];
+    portsw [label="порт SW\n32 бит/такт + маска байт\nQST (KV)", shape=cds, fillcolor="#ffe3d6"];
+  }
+
+  // control
+  ctrl -> loader [label="LOAD: PROG_ADDR, PROG_N", style=dashed];
+  ctrl -> dec [label="RUN · ARG0..7 → R8..R15", style=dashed];
+  win -> ctrl [label="HALTED / ERROR / icount", style=dashed];
+  loader -> imem; imem -> dec; dec -> win;
+  win -> {dma iss quant vpu} [style=dashed, color="#8a63c6"];
+  win -> arr [label="urel", style=dashed, color="#8a63c6"];
+  win -> coll [label="BAR / GATHER", style=dashed, color="#8a63c6"];
+
+  // memory ports
+  dram -> portb [dir=both, label="чтение / запись чанков"];
+  dram -> porta [label="чтение"];
+  portsw -> dram [label="запись слов"];
+  portb -> loader [label="программа"];
+  portb -> dma [dir=both, label="LD / ST"];
+  portb -> cfifo [label="веса, K-строки, Vᵀ", color="#d77b12", penwidth=2.2];
+  porta -> sfifo [color="#d77b12"];
+  iss -> portb [style=dashed, label="запросы"]; iss -> porta [style=dashed];
+
+  // MXU internals
+  cfifo -> arr [label="1 чанк/такт", color="#d77b12", penwidth=2.2];
+  sfifo -> epi [color="#d77b12"];
+  act -> arr [label="4 строки × блок + Sa", color="#d77b12", penwidth=2.2];
+  arr -> epi [color="#d77b12"];
+  epi -> arb [label="≤ 2 FP32/такт", color="#d77b12", penwidth=2.2];
+  arb -> epi [label="ACC/ASCALE: старое значение", style=dotted, color="#d77b12"];
+
+  // other units with TMEM
+  dma -> arb [dir=both, label="8 слов/такт", color="#555555"];
+  quant -> arb [dir=back, label="8 FP32/такт (Q, Q2, Q3)", color="#2b8a3e"];
+  quant -> act [label="QACT: 8 B/такт + {da, Sa}", color="#2b8a3e", penwidth=2.2];
+  quant -> portsw [label="QST", color="#2b8a3e", penwidth=2.2];
+  vpu -> arb [dir=both, label="VA, VB → запись: 8 слов/такт", color="#1971c2"];
+  dma -> vpu [label="DSTEP / STREAM (минуя TMEM)", style=dotted];
+  coll -> arb [dir=both, label="GATHER; RLD → R[rd]", color="#7a7a7a"];
+  arb -> tm [dir=both, penwidth=1.6];
+}

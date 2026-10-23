@@ -5,7 +5,7 @@ assert(mod(p.hidden,p.heads)==0 && mod(p.heads,p.kv_heads)==0);
 assert(mod(p.hidden/p.heads,2)==0 && p.hidden>=c.D);
 assert(mod(p.hidden,c.D)==0 && mod(p.intermediate,c.D)==0);
 assert(max(p.hidden,p.intermediate)<=c.D*c.ACT_BLOCKS);
-assert(p.layers>=1 && p.max_seq>=1 && p.vocab>=2 && p.kv_bytes==4);
+assert(p.layers>=1 && p.max_seq>=1 && p.vocab>=2);
 assert(strcmp(p.weight_format,'int8'));
 rng(p.seed); model.p=p; model.embedding=single(randn(p.vocab,p.hidden)/sqrt(p.hidden));
 kv=p.kv_heads*(p.hidden/p.heads); model.weight_bytes=4*numel(model.embedding);
@@ -27,7 +27,7 @@ end
 model.final_norm=ones(1,p.hidden,'single');
 model.head=otpu.quantize(model.embedding,c.D); % tied embedding/output head
 model.weight_bytes=model.weight_bytes+64*ceil(p.vocab*(p.hidden+4+p.hidden/c.D)/64)+4*p.hidden;
-model.kv_capacity_bytes=p.layers*2*p.max_seq*kv*p.kv_bytes;
+kvb=otpu.kv_bytes(p,c,p.max_seq); model.kv_capacity_bytes=kvb.capacity;
 assert(model.weight_bytes+model.kv_capacity_bytes <= 2*c.S*c.channel_bytes, 'HBM capacity exceeded');
 state.pos=0; state.K=zeros(p.max_seq,kv,p.layers,'single');
 state.V=zeros(p.max_seq,kv,p.layers,'single'); state.time_s=0;

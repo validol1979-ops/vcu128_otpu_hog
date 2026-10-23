@@ -10,7 +10,7 @@
 // - Recovery: while auto is on, stat_rx_status low for RECOVER_MS (after the link was up
 //   once, or after BOOT_MS from power-up) pulses gtwiz_reset_rx_datapath for T_PULSE_US.
 // - Requests from the registers: full reset (as power-up), RX datapath reset.
-// All in dclk (100 MHz); rx_status and powergood are asynchronous inputs.
+// All in clk (CLK_HZ: the top's core_clk); rx_status and powergood are asynchronous inputs.
 
 module eth40_mgmt #(
     parameter int CLK_HZ     = 100_000_000,
@@ -19,7 +19,7 @@ module eth40_mgmt #(
     parameter int RECOVER_MS = 2000,
     parameter int T_PULSE_US = 100
 )(
-    input  logic        clk,            // dclk
+    input  logic        clk,            // CLK_HZ
     input  logic        rst,
 
     // registers (clk)

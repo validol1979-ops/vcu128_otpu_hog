@@ -1,0 +1,35 @@
+digraph G {
+graph [rankdir=TB, nodesep=0.65, ranksep=1, pad=0.3, fontname="DejaVu Sans", label="03 LLM numerical model", labelloc=t, fontsize=24];
+node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"];
+edge [fontname="DejaVu Sans", fontsize=10, color="#3d6a8b"];
+token [label="Token ID\nPrompt then greedy decode\nRandom deterministic weights",fillcolor="#fff1d6"];
+embed [label="Embedding\nFP32 row from HBM",fillcolor="#def2e9"];
+norm1 [label="Attention RMSNorm\nMathematical VPU approximation",fillcolor="#e3edf9"];
+qkv [label="Q / K / V projections\nQACT → INT8 MM → FP32",fillcolor="#e3edf9"];
+rope [label="RoPE\nQ and K, current position",fillcolor="#e3edf9"];
+cache [label="KV-cache INT8 + FP32 scale in HBM\nQST: TMEM → QUANT → HBM\nK rows, Vᵀ tiles, prefix 1..T",fillcolor="#def2e9"];
+attn [label="GQA causal attention\nMXU: q·Kᵀ (K streamed from HBM)\nVPU: softmax · MXU: P·Vᵀ",fillcolor="#e3edf9"];
+out [label="O projection + residual\nQACT → INT8 MM → add input",fillcolor="#e3edf9"];
+norm2 [label="FFN RMSNorm",fillcolor="#e3edf9"];
+gate [label="Gate / Up projections\nQACT → INT8 MM",fillcolor="#e3edf9"];
+swiglu [label="SwiGLU\nSiLU(gate) × up",fillcolor="#e3edf9"];
+down [label="Down projection + residual\nINT8 MM → add input\nRepeat next layer",fillcolor="#e3edf9"];
+final [label="Final RMSNorm + LM head\nLogits → argmax → next ID",fillcolor="#e3edf9"];
+timing [label="llm_event / HBM estimate\n64-byte rounded tensor traffic\nduration=max(memory, compute)",fillcolor="#fff0d9"];
+token -> embed [label="token ID",style=solid];
+embed -> norm1 [label="hidden vector",style=solid];
+norm1 -> qkv [label="normalized FP32",style=solid];
+qkv -> rope [label="Q,K; V bypass",style=solid];
+rope -> cache [label="K,V current",style=solid];
+cache -> attn [label="KV prefix; Q from RoPE",style=solid];
+attn -> out [label="attention result",style=solid];
+out -> norm2 [label="residual result",style=solid];
+norm2 -> gate [label="normalized FP32",style=solid];
+gate -> swiglu [label="gate,up",style=solid];
+swiglu -> down [label="gated hidden",style=solid];
+down -> norm1 [label="next layer",style=dashed];
+down -> final [label="after last layer",style=solid];
+final -> token [label="next token",style=dashed];
+cache -> timing [label="read / write bytes",style=dashed];
+qkv -> timing [label="weight bytes / compute ops",style=dashed];
+}

@@ -14,11 +14,13 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
-from hbm_model import Cfg, HbmModel, default_beat, hbm_map
+from hbm_model import PCB, Cfg, HbmModel, default_beat, hbm_map, hbm_sub
 
 CH_BASE = int(os.environ.get("HBM_CH_BASE", "0"), 0)
 GRAN = int(os.environ.get("HBM_PC_GRAN", "0"))
 XOR = os.environ.get("HBM_PC_XOR", "1") == "1"
+NS = int(os.environ.get("HBM_NS", "1"))         # AXI-портов на native-порт
+NA = 2 * NS
 N = int(os.environ.get("HBM_N", "20000"))
 SEED = int(os.environ.get("SEED", "1"))
 OUT = Path(os.environ.get("HBM_OUT", "."))
@@ -29,6 +31,11 @@ FULL = (1 << 64) - 1
 
 def amap(beat):
     return hbm_map(beat, CH_BASE, GRAN, XOR)
+
+
+def axi_port(p, beat):
+    """AXI-порт beat native-порта p: p + 2 * подпорт (зеркало sub_of в otpu_hbm_port)."""
+    return p + 2 * hbm_sub(beat, NS, GRAN, XOR)
 
 
 def apply_we(old, new, we):
@@ -56,8 +63,9 @@ class CSide:
         self.pend = [deque(), deque()]      # сгенерированные, не принятые: (we, beat, data, mask)
         self.cv = [0, 0]                    # c_cmd_valid в текущем такте
         self.exp_r = [deque(), deque()]     # ожидаемые данные чтений
-        self.exp_ar = [deque(), deque()]    # ожидаемые адреса AR / AW в порядке команд
-        self.exp_aw = [deque(), deque()]
+        # ожидаемые адреса AR / AW по AXI-портам, в порядке команд
+        self.exp_ar = [deque() for _ in range(NA)]
+        self.exp_aw = [deque() for _ in range(NA)]
         self.n_rd = [0, 0]
         self.n_wr = [0, 0]
         self.n_rdata = 0
@@ -134,11 +142,11 @@ class CSide:
                 if not (wrdy >> p) & 1 or not (self._wv >> p) & 1:
                     self.err(f"{now}: порт {p}: запись принята без данных")
                 self.ref[beat] = apply_we(self.value(beat), data, mask)
-                self.exp_aw[p].append(amap(beat))
+                self.exp_aw[axi_port(p, beat)].append(amap(beat))
                 self.n_wr[p] += 1
             else:
                 self.exp_r[p].append((beat, self.value(beat)))
-                self.exp_ar[p].append(amap(beat))
+                self.exp_ar[axi_port(p, beat)].append(amap(beat))
                 self.n_rd[p] += 1
         if rv:
             if rv == 3:
@@ -180,7 +188,7 @@ def rand_gen(rng, p, n, p_write=0.5, p_hot=0.5, p_partial=0.2):
     """Случайные команды порта p (бит 7 beat = p): горячие beat (коллизии), окно, всё."""
     def fix(b):
         return (b & ~0x80) | (p << 7)
-    hot = [fix(rng.getrandbits(25)) for _ in range(6)] + [fix(rng.randrange(256)) for _ in range(4)]
+    hot = [fix(rng.getrandbits(22 + PCB)) for _ in range(6)] + [fix(rng.randrange(256)) for _ in range(4)]
     for _ in range(n):
         r = rng.random()
         if r < p_hot:
@@ -188,7 +196,7 @@ def rand_gen(rng, p, n, p_write=0.5, p_hot=0.5, p_partial=0.2):
         elif r < 0.9:
             beat = fix(rng.randrange(4096))
         else:
-            beat = fix(rng.getrandbits(25))
+            beat = fix(rng.getrandbits(22 + PCB))
         if rng.random() < p_write:
             mask = FULL if rng.random() >= p_partial else rng.getrandbits(64)
             yield 1, beat, rng.getrandbits(512), mask
@@ -213,7 +221,7 @@ async def setup(dut, cfg, rng, clock=True):
         cocotb.start_soon(Clock(dut.uclk, 4444, unit="ps").start())
     else:
         await RisingEdge(dut.uclk)
-    model = HbmModel(dut, rng, cfg, ch_base=CH_BASE)
+    model = HbmModel(dut, rng, cfg, ch_base=CH_BASE, nports=NA)
     for s in ("c_cmd_valid", "c_cmd_we", "c_cmd_addr", "c_wdata_valid", "c_wdata_data",
               "c_wdata_we"):
         getattr(dut, s).value = 0
@@ -226,8 +234,8 @@ async def setup(dut, cfg, rng, clock=True):
 
 async def run(dut, cs, model, limit):
     """Такт: после фронта -- выходы моделей, в ReadOnly -- рукопожатия этого такта."""
-    model.ports[0].on_ar = model.ports[1].on_ar = cs.on_ar
-    model.ports[0].on_aw = model.ports[1].on_aw = cs.on_aw
+    for pm in model.ports:
+        pm.on_ar, pm.on_aw = cs.on_ar, cs.on_aw
     now, idle = 0, 0
     maxbusy = [0, 0]
     while now < limit:
@@ -252,7 +260,7 @@ async def run(dut, cs, model, limit):
 def status(dut):
     def arr(sig, w):
         v = sig.value.to_unsigned()
-        return [(v >> (w * p)) & ((1 << w) - 1) for p in range(2)]
+        return [(v >> (w * a)) & ((1 << w) - 1) for a in range(NA)]
     return dict(rcmd=arr(dut.st_rcmd, 32), wcmd=arr(dut.st_wcmd, 32), rout=arr(dut.st_rout, 7),
                 wout=arr(dut.st_wout, 7), dep=arr(dut.st_dep, 32), busy=dut.st_busy.value.to_unsigned(),
                 err_cnt=dut.st_err_cnt.value.to_unsigned(), err=int(dut.st_err.value),
@@ -261,7 +269,7 @@ def status(dut):
 
 def final_checks(dut, cs, model, cycles, limit, name, errs_expected=0, extra=None):
     st = status(dut)
-    res = dict(test=name, seed=SEED, ch_base=hex(CH_BASE), gran=GRAN, xor=XOR, cycles=cycles,
+    res = dict(test=name, seed=SEED, ch_base=hex(CH_BASE), gran=GRAN, xor=XOR, ns=NS, cycles=cycles,
                reads=cs.n_rd, writes=cs.n_wr, rdata=cs.n_rdata, status=st,
                hbm_ar=[pm.n_ar for pm in model.ports], hbm_aw=[pm.n_aw for pm in model.ports],
                overtakes=sum(pm.overtakes for pm in model.ports),
@@ -271,9 +279,10 @@ def final_checks(dut, cs, model, cycles, limit, name, errs_expected=0, extra=Non
     errs = cs.errors + model.errors
     if cycles >= limit:
         errs.append(f"не завершилось за {limit} тактов")
-    if st["rcmd"] != cs.n_rd or st["wcmd"] != cs.n_wr:
+    if [sum(st["rcmd"][p::2]) for p in range(2)] != cs.n_rd or \
+            [sum(st["wcmd"][p::2]) for p in range(2)] != cs.n_wr:
         errs.append(f"счётчики команд {st['rcmd']}/{st['wcmd']} != {cs.n_rd}/{cs.n_wr}")
-    if st["rout"] != [0, 0] or st["wout"] != [0, 0] or st["busy"]:
+    if any(st["rout"]) or any(st["wout"]) or st["busy"]:
         errs.append(f"порт не пуст в конце: {st}")
     if st["err_cnt"] != errs_expected or st["perr"] or st["err"] != int(errs_expected > 0):
         errs.append(f"ошибки: st_err_cnt {st['err_cnt']} (ожидалось {errs_expected}), "
@@ -308,7 +317,8 @@ async def random_traffic(dut):
     limit = 60 * N + 20000
     cycles = await run(dut, cs, model, limit)
     res = final_checks(dut, cs, model, cycles, limit, f"random_traffic_g{GRAN}")
-    assert res["status"]["dep"][0] > 0 and res["status"]["dep"][1] > 0, "нет ожиданий по beat"
+    dep = res["status"]["dep"]
+    assert sum(dep[0::2]) > 0 and sum(dep[1::2]) > 0, "нет ожиданий по beat"
     assert res["overtakes"] > 0, "модель ни разу не выполнила чтение раньше записи"
 
 

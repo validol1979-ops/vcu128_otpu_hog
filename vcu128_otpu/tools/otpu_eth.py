@@ -22,8 +22,8 @@ poll (опрос выполняет плата: (reg & mask) == val), close; а�
 recvmmsg, собирается gcc при первом использовании в ~/.cache/otpu_eth, root не нужен);
 без gcc — тот же алгоритм на Python (медленнее, порядка сотен МБ/с).
 Буферы сокетов ограничены net.core.rmem_max/wmem_max (по умолчанию 208 КиБ): окно чтения
-выбрано под этот предел; с `sysctl net.core.rmem_max=67108864` (root, однократно) можно
-увеличить read_window.
+по умолчанию выбирается по фактическому буферу приёма (2 запроса при 208 КиБ, до 8 при
+`net.core.rmem_max=67108864` — `tools/host/install.sh`, root, однократно).
 """
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ OPREC = struct.Struct("<IIII")   # операция регистров: код|�
 PHDR = HDR.size
 BEAT = 64
 MAXW = 8192                     # байт данных в кадре (MTU 9000)
+READ_WINDOW_MAX = 8             # запросов чтения в полёте (очередь дескрипторов платы — 8)
 REGMAX = 256                    # операций в пачке
-ETH_CLK_HZ = 156_250_000        # такты таймаута опроса
+ETH_CLK_HZ = 312_500_000        # такты таймаута опроса: eth_clk = tx_clk_out l_ethernet, 312,5 МГц (clocks.rpt)
 PORT = 0x4F54                   # 20308
 BOARD_IP = "192.168.41.2"
 CH_BYTES = 1 << 31
@@ -94,6 +95,36 @@ def op_read(addr: int) -> bytes:
 def op_poll(addr: int, mask: int, val: int, cycles: int) -> bytes:
     return OPREC.pack(RO_POLL << 28 | (addr & 0xFFFFF), mask & M32, val & M32,
                       min(max(int(cycles), 0), M32))
+
+
+# ------------------------------------------------------------------------------ цель VCU128
+TARGET_TOML = Path(__file__).resolve().parents[1] / "target" / "vcu128.toml"
+PLATFORM_ID = 3
+
+
+def install_target() -> bool:
+    """Научить upstream opentpu.target.by_platform цели VCU128 (platform_id 3), которой нет
+    в upstream targets/: Board.info берёт по ней формулу температуры (family "xilinxus",
+    SYSMONE4), иначе temp_c считается по формуле XADC 7-series (на ~4 °C выше). Upstream не
+    меняется: обёртка над функцией модуля (Board.info импортирует её при каждом вызове).
+    Без opentpu в PYTHONPATH — ничего; True — обёртка стоит."""
+    try:
+        import opentpu.target as T
+    except ImportError:
+        return False
+    if getattr(T.by_platform, "_vcu128", False):
+        return True
+    orig = T.by_platform
+
+    def by_platform(pid: int):
+        t = orig(pid)
+        if t is None and pid == PLATFORM_ID and TARGET_TOML.exists():
+            t = T.load(str(TARGET_TOML))
+        return t
+
+    by_platform._vcu128 = True
+    T.by_platform = by_platform
+    return True
 
 
 # ------------------------------------------------------------------------------ помощник на C
@@ -149,7 +180,8 @@ class EthTransport:
 
     window — кадров записи без подтверждения (по 8 КиБ; приёмная FIFO платы 128 КиБ);
     read_req / read_window — байт в запросе чтения и запросов в полёте (в полёте не больше
-    буфера приёма сокета); rto — таймаут повтора, с; retries — повторов одного кадра."""
+    буфера приёма сокета; None — по фактическому SO_RCVBUF, 2…READ_WINDOW_MAX);
+    rto — таймаут повтора, с; retries — повторов одного кадра."""
     ecc = False                 # HBM без инициализации ECC хостом (Board.scrub не нужен)
     threaded = True             # Board может звать mem_* из рабочего потока
     streams = True              # память доступна во время прогона (отдельный сокет)
@@ -159,7 +191,7 @@ class EthTransport:
     poll_exact = True           # опрос — чтения подряд на плате
 
     def __init__(self, host: str = BOARD_IP, port: int = PORT, *, window: int = 12,
-                 read_req: int = 96 << 10, read_window: int = 2, frame: int = MAXW,
+                 read_req: int = 96 << 10, read_window: int | None = None, frame: int = MAXW,
                  rto: float = 0.02, reg_rto: float = 0.05, retries: int = 50,
                  poll_slice: float = 0.01, bufsize: int = 64 << 20, fast: bool | None = None,
                  devname: str | None = None, lock: bool = False):
@@ -184,9 +216,13 @@ class EthTransport:
         try:
             self.msock = self._sock(bufsize)
             self.rsock = self._sock(1 << 20)
+            if read_window is None:         # ядро удваивает SO_RCVBUF: половина — под данные
+                rcv = self.msock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) // 2
+                self.read_window = max(2, min(READ_WINDOW_MAX, rcv // self.read_req))
         except BaseException:
             self.close()
             raise
+        install_target()
         self._fast = _fast_lib() if fast in (None, True) else None
         if fast and self._fast is None:
             raise RuntimeError("otpu_eth_fast: no C helper (gcc?)")

@@ -8,11 +8,12 @@
 случайные. Проверки протокола копятся в self.errors.
 """
 
+import os
 import random
 
 MASK64 = (1 << 64) - 1
 MASK256 = (1 << 256) - 1
-CH_SIZE = 1 << 31
+CH_SIZE = 1 << 31                 # канал при PCB 3; размер по PCB -- HbmModel.ch_size
 
 
 def default_word(waddr):
@@ -32,14 +33,31 @@ def default_beat(addr):
     return default_word(addr) | (default_word(addr + 32) << 256)
 
 
-def hbm_map(beat, ch_base=0, gran=0, xor=True):
+PCB = int(os.environ.get("HBM_PCB", "3"))   # log2 псевдоканалов в канале (otpu_hbm_port PCB)
+
+
+def hbm_map(beat, ch_base=0, gran=0, xor=True, pcb=None):
     """Номер beat канала -> глобальный байтовый адрес HBM (зеркало otpu_hbm_amap)."""
-    g = gran
-    pc = (beat >> g) & 7
+    g, p = gran, PCB if pcb is None else pcb
+    m = (1 << p) - 1
+    pc = (beat >> g) & m
     if xor:
-        pc ^= (beat >> (g + 3)) & 7
-    off = ((beat >> (g + 3)) << g) | (beat & ((1 << g) - 1))
-    return (ch_base & ~(CH_SIZE - 1)) | (pc << 28) | (off << 6)
+        pc ^= (beat >> (g + p)) & m
+    off = (((beat >> (g + p)) << g) | (beat & ((1 << g) - 1))) & ((1 << 22) - 1)
+    return (ch_base & ~((1 << (28 + p)) - 1)) | (pc << 28) | (off << 6)
+
+
+def hbm_sub(beat, ns, gran=0, xor=True, pcb=None):
+    """Подпорт (AXI-порт native-порта) beat: старшие log2(ns) бит номера псевдоканала
+    (зеркало sub_of в otpu_hbm_port)."""
+    if ns == 1:
+        return 0
+    p = PCB if pcb is None else pcb
+    m = (1 << p) - 1
+    pc = (beat >> gran) & m
+    if xor:
+        pc ^= (beat >> (gran + p)) & m
+    return pc >> (p - (ns.bit_length() - 1))
 
 
 def apply_strobe(old, new, strb, nbytes):
@@ -99,7 +117,8 @@ class Cfg:
 class PortModel:
     def __init__(self, p, mem, rng, cfg, ch_base, errors):
         self.p, self.mem, self.rng, self.cfg, self.errors = p, mem, rng, cfg, errors
-        self.ch_base = ch_base & ~(CH_SIZE - 1)
+        self.ch_size = 1 << (28 + PCB)
+        self.ch_base = ch_base & ~(self.ch_size - 1)
         self.aw = []              # принятые AW: (id, addr), ждут W
         self.wb = []              # принятые W: (data, strb, last, wid)
         self.wq = []              # записи к выполнению: (t, id, addr, beats)
@@ -131,7 +150,7 @@ class PortModel:
             self.err(f"{kind}: LEN {ln} SIZE {size} BURST {burst}")
         if addr & 63:
             self.err(f"{kind}: адрес {addr:#x} не кратен 64")
-        if not (self.ch_base <= addr < self.ch_base + CH_SIZE):
+        if not (self.ch_base <= addr < self.ch_base + self.ch_size):
             self.err(f"{kind}: адрес {addr:#x} вне канала {self.ch_base:#x}")
 
     def step(self, now, s):
@@ -268,7 +287,7 @@ def _field(v, p, w):
 
 
 class HbmModel:
-    """Два порта HBM на упакованных сигналах DUT m_*[1:0][...] (домен uclk)."""
+    """nports портов HBM на упакованных сигналах DUT m_*[nports-1:0][...] (домен uclk)."""
 
     def __init__(self, dut, rng, cfg, ch_base=0, nports=2, prefix="m_"):
         self.dut, self.rng, self.n = dut, rng, nports

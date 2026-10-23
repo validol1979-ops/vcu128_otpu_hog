@@ -1,7 +1,13 @@
 // Связка для теста: upstream otpu_mem_ch (как есть) + otpu_hbm_port; порты AXI3 HBM -- наружу,
 // к Python-модели (hbm_model.py). Такты clk (ускоритель), xclk (XDMA/мост), uclk (HBM).
 module tb_memch_hbm #(
-  parameter int XIDW = 4
+  parameter int XIDW = 4,
+  parameter int NS   = 1,             // AXI-портов HBM на native-порт (otpu_hbm_port NS)
+  parameter int AQ   = 4,
+  parameter int ARD  = 64,            // otpu_mem_ch: кредиты чтения ускорителя, beat
+  parameter int RD   = 32,            // otpu_hbm_port: слоты чтения на AXI-порт
+  parameter int PCB  = 3,             // otpu_hbm_port: log2 псевдоканалов в канале
+  localparam int NA  = 2 * NS
 ) (
   input  logic              clk,
   input  logic              rst,
@@ -50,43 +56,43 @@ module tb_memch_hbm #(
   output logic              x_rlast,
   input  logic              uclk,
   input  logic              urst,
-  output logic [1:0]        m_awvalid,
-  input  logic [1:0]        m_awready,
-  output logic [1:0][32:0]  m_awaddr,
-  output logic [1:0][5:0]   m_awid,
-  output logic [1:0][3:0]   m_awlen,
-  output logic [1:0][2:0]   m_awsize,
-  output logic [1:0][1:0]   m_awburst,
-  output logic [1:0]        m_wvalid,
-  input  logic [1:0]        m_wready,
-  output logic [1:0][255:0] m_wdata,
-  output logic [1:0][31:0]  m_wstrb,
-  output logic [1:0]        m_wlast,
-  output logic [1:0][5:0]   m_wid,
-  output logic [1:0][31:0]  m_wdata_parity,
-  input  logic [1:0]        m_bvalid,
-  output logic [1:0]        m_bready,
-  input  logic [1:0][5:0]   m_bid,
-  input  logic [1:0][1:0]   m_bresp,
-  output logic [1:0]        m_arvalid,
-  input  logic [1:0]        m_arready,
-  output logic [1:0][32:0]  m_araddr,
-  output logic [1:0][5:0]   m_arid,
-  output logic [1:0][3:0]   m_arlen,
-  output logic [1:0][2:0]   m_arsize,
-  output logic [1:0][1:0]   m_arburst,
-  input  logic [1:0]        m_rvalid,
-  output logic [1:0]        m_rready,
-  input  logic [1:0][5:0]   m_rid,
-  input  logic [1:0][255:0] m_rdata,
-  input  logic [1:0][1:0]   m_rresp,
-  input  logic [1:0]        m_rlast,
-  output logic [1:0][31:0]  st_rcmd,
-  output logic [1:0][31:0]  st_wcmd,
-  output logic [1:0][6:0]   st_rout,
-  output logic [1:0][6:0]   st_wout,
-  output logic [1:0][31:0]  st_dep,
-  output logic [1:0]        st_busy,
+  output logic [NA-1:0]        m_awvalid,
+  input  logic [NA-1:0]        m_awready,
+  output logic [NA-1:0][32:0]  m_awaddr,
+  output logic [NA-1:0][5:0]   m_awid,
+  output logic [NA-1:0][3:0]   m_awlen,
+  output logic [NA-1:0][2:0]   m_awsize,
+  output logic [NA-1:0][1:0]   m_awburst,
+  output logic [NA-1:0]        m_wvalid,
+  input  logic [NA-1:0]        m_wready,
+  output logic [NA-1:0][255:0] m_wdata,
+  output logic [NA-1:0][31:0]  m_wstrb,
+  output logic [NA-1:0]        m_wlast,
+  output logic [NA-1:0][5:0]   m_wid,
+  output logic [NA-1:0][31:0]  m_wdata_parity,
+  input  logic [NA-1:0]        m_bvalid,
+  output logic [NA-1:0]        m_bready,
+  input  logic [NA-1:0][5:0]   m_bid,
+  input  logic [NA-1:0][1:0]   m_bresp,
+  output logic [NA-1:0]        m_arvalid,
+  input  logic [NA-1:0]        m_arready,
+  output logic [NA-1:0][32:0]  m_araddr,
+  output logic [NA-1:0][5:0]   m_arid,
+  output logic [NA-1:0][3:0]   m_arlen,
+  output logic [NA-1:0][2:0]   m_arsize,
+  output logic [NA-1:0][1:0]   m_arburst,
+  input  logic [NA-1:0]        m_rvalid,
+  output logic [NA-1:0]        m_rready,
+  input  logic [NA-1:0][5:0]   m_rid,
+  input  logic [NA-1:0][255:0] m_rdata,
+  input  logic [NA-1:0][1:0]   m_rresp,
+  input  logic [NA-1:0]        m_rlast,
+  output logic [NA-1:0][31:0]  st_rcmd,
+  output logic [NA-1:0][31:0]  st_wcmd,
+  output logic [NA-1:0][6:0]   st_rout,
+  output logic [NA-1:0][6:0]   st_wout,
+  output logic [NA-1:0][31:0]  st_dep,
+  output logic [NA-1:0]        st_busy,
   output logic [15:0]       st_err_cnt,
   output logic              st_err,
   output logic              st_perr,
@@ -99,7 +105,7 @@ module tb_memch_hbm #(
   logic [1:0][511:0] c_wdata_data, c_rdata_data;
   logic [1:0][63:0]  c_wdata_we;
 
-  otpu_mem_ch #(.XIDW(XIDW)) u_ch (
+  otpu_mem_ch #(.XIDW(XIDW), .ARD(ARD)) u_ch (
     .clk, .rst, .n_cvalid, .n_cready, .n_cwe, .n_caddr, .n_wvalid, .n_wready, .n_wdata, .n_wmask,
     .n_rvalid, .n_rdata, .n_wdone, .n_err,
     .xclk, .xrst, .x_awvalid, .x_awready, .x_awid, .x_awaddr, .x_awlen, .x_wvalid, .x_wready,
@@ -108,7 +114,7 @@ module tb_memch_hbm #(
     .uclk, .urst, .c_cmd_valid, .c_cmd_ready, .c_cmd_we, .c_cmd_addr, .c_wdata_valid,
     .c_wdata_ready, .c_wdata_data, .c_wdata_we, .c_rdata_valid, .c_rdata_data);
 
-  otpu_hbm_port u_hbm (
+  otpu_hbm_port #(.NS(NS), .AQ(AQ), .RD(RD), .PCB(PCB)) u_hbm (
     .uclk, .urst, .c_cmd_valid, .c_cmd_ready, .c_cmd_we, .c_cmd_addr, .c_wdata_valid,
     .c_wdata_ready, .c_wdata_data, .c_wdata_we, .c_rdata_valid, .c_rdata_data,
     .m_awvalid, .m_awready, .m_awaddr, .m_awid, .m_awlen, .m_awsize, .m_awburst,

@@ -1,0 +1,39 @@
+// Level 1: the host's chat session (upstream Engine/BoardBackend + EthTransport).
+digraph host {
+  graph [fontname="Helvetica", fontsize=12, labelloc=t, nodesep=0.4, ranksep=0.45,
+         label="Уровень 1. Сеанс на ПК: от запуска до ответа (Engine + Board + EthTransport)"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9, color="#396484"];
+  start [shape=circle, label="", width=0.25, style=filled, fillcolor="#17324d"];
+  done [shape=doublecircle, label="", width=0.2, style=filled, fillcolor="#17324d"];
+  connect [label="CONNECT\nUDP-сокеты, ARP\nBoard.info(): ID, CAPS,\nCFG_HASH = hash(target)?"];
+  fail [label="ОТКАЗ\nчужой битстрим /\nнет калибровки HBM", fillcolor="#ffe3e3"];
+  compile [label="COMPILE\nSpec.from_hf → Image\nкомпиляция программ\n(prefill, decode по корзинам 256)"];
+  load [label="LOAD_IMAGE\nBoard.write(образ)\nWRITE-кадры 8 KiB → HBM\n(LFM2.5: 8 с)"];
+  prompt [label="TOKENIZE\nчат-шаблон → id[0..P-1]"];
+  prefill [label="PREFILL\nпрогоны по R ≤ 4 строк:\nARG ← позиция, RUN, WAIT\nK/V пишутся в HBM", fillcolor="#fff4d6"];
+  args [label="SET_ARGS\nARG0..7 ← id, pos\n(LOAD программы, если\nсменилась корзина)", fillcolor="#e6f4ea"];
+  run [label="RUN\nCTRL=CLEAR, CTRL=RUN", fillcolor="#e6f4ea"];
+  wait [label="WAIT\nопрос STATUS.HALTED на плате\n(срезы 10 мс) + чтение\nготовых кусков логитов", fillcolor="#e6f4ea"];
+  sample [label="SAMPLE\nсчётчики, CTRL=0\nвыбор id (greedy / top-k)", fillcolor="#e6f4ea"];
+  emit [label="EMIT\nдетокенизация, вывод"];
+  err [label="ERROR\nSTATUS.ERROR / таймаут\n/ AXI_ERR", fillcolor="#ffe3e3"];
+  gen [label="GENERATE_CARD (CAPS GEN)\nплата сама: ARGMAX → out[] →\nRLD эмбеддинга → LOOP\nхост только опрашивает out[]", fillcolor="#f0e6ff"];
+
+  start -> connect;
+  connect -> fail [label="hash/калибровка ≠"];
+  connect -> compile [label="ok"];
+  compile -> load -> prompt -> prefill;
+  prefill -> prefill [label="ещё строки prompt"];
+  prefill -> sample [label="последний прогон prompt\nдал логиты"];
+  args -> run -> wait;
+  wait -> wait [label="не HALTED"];
+  wait -> sample [label="HALTED"];
+  wait -> err [label="ERROR / таймаут"];
+  sample -> emit;
+  emit -> args [label="не стоп-токен и\nn < max_tokens"];
+  emit -> prompt [label="новая реплика\n(KV остаётся в HBM)", style=dashed];
+  emit -> done [label="стоп"];
+  prompt -> gen [label="режим на плате", style=dashed];
+  gen -> emit [style=dashed, label="id из out[]"];
+}

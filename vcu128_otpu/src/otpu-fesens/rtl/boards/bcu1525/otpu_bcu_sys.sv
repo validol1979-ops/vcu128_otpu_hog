@@ -36,6 +36,7 @@ module otpu_bcu_sys #(
   parameter int TMEM_SDM   = -1,
   parameter int MXU_IMPL   = 2,
   parameter int MXU_CL     = 16,
+  parameter int MXU_E      = 0,             // MXU epilogue lanes (otpu_board; 0: MCOLS / 2)
   parameter int VPU_CL     = 2,
   parameter int ULANES     = 8,
   parameter int TRACE_DEPTH = 16384,
@@ -51,7 +52,16 @@ module otpu_bcu_sys #(
   // bit j: board channel j's native port crosses an SLR (slice 0 in SLR0 on DIMM C1 in SLR1,
   // slice 1 in SLR2 on C2 in SLR1: channels 1 and 3; constraints/bcu1525_floorplan.xdc): two
   // otpu_native_reg, u_tx with the slice and u_rx with the channel, flip-flop to flip-flop across
-  parameter logic [3:0] SLL = 4'b1010,
+  // (2 * S bits: one per channel)
+  parameter logic [2*S-1:0] SLL = (2 * S)'(4'b1010),
+  // bit j (with SLL[j]): channel j's native port crosses two SLRs (a slice in the SLR beyond the
+  // next): a third otpu_native_reg, u_mid, in the SLR between, so that no path spans two crossings
+  parameter logic [2*S-1:0] SLL2 = '0,
+  parameter int CH_LOG2    = 31,            // log2 bytes per channel a slice addresses (otpu_board)
+  // otpu_mem_ch's accelerator read credits (beats in flight per channel): the read stream's rate is
+  // at most ARD beats per round trip through the controller, so a memory of a longer latency (HBM)
+  // needs more than the DDR4 cores' 64. Not a target parameter: the core does not see it.
+  parameter int ARD        = 64,
   parameter int NC         = 2 * S          // memory channels (two per slice)
 ) (
   // core clock and reset (synchronous, high), XDMA's clock and reset
@@ -151,9 +161,27 @@ module otpu_bcu_sys #(
         .s_wdone(b_wdone[j]), .s_err(b_err[j]),
         .m_cvalid(cv), .m_cready(cr), .m_cwe(cwe), .m_caddr(ca), .m_wvalid(wv), .m_wready(wr),
         .m_wdata(wd), .m_wmask(wm), .m_rvalid(rv), .m_rdata(rd), .m_wdone(wdone), .m_err(err));
+      logic mcv, mcr, mcwe, mwv, mwr, mrv, merr;
+      logic [24:0] mca;
+      logic [511:0] mwd, mrd;
+      logic [63:0] mwm;
+      logic [15:0] mwdone;
+      if (SLL2[j]) begin : g_mid
+        otpu_native_reg u_mid (.clk, .rst,
+          .s_cvalid(cv), .s_cready(cr), .s_cwe(cwe), .s_caddr(ca), .s_wvalid(wv), .s_wready(wr),
+          .s_wdata(wd), .s_wmask(wm), .s_rvalid(rv), .s_rdata(rd), .s_wdone(wdone), .s_err(err),
+          .m_cvalid(mcv), .m_cready(mcr), .m_cwe(mcwe), .m_caddr(mca), .m_wvalid(mwv),
+          .m_wready(mwr), .m_wdata(mwd), .m_wmask(mwm), .m_rvalid(mrv), .m_rdata(mrd),
+          .m_wdone(mwdone), .m_err(merr));
+      end else begin : g_one
+        assign mcv = cv; assign cr = mcr; assign mcwe = cwe; assign mca = ca;
+        assign mwv = wv; assign wr = mwr; assign mwd = wd; assign mwm = wm;
+        assign rv = mrv; assign rd = mrd; assign wdone = mwdone; assign err = merr;
+      end
       otpu_native_reg u_rx (.clk, .rst,
-        .s_cvalid(cv), .s_cready(cr), .s_cwe(cwe), .s_caddr(ca), .s_wvalid(wv), .s_wready(wr),
-        .s_wdata(wd), .s_wmask(wm), .s_rvalid(rv), .s_rdata(rd), .s_wdone(wdone), .s_err(err),
+        .s_cvalid(mcv), .s_cready(mcr), .s_cwe(mcwe), .s_caddr(mca), .s_wvalid(mwv),
+        .s_wready(mwr), .s_wdata(mwd), .s_wmask(mwm), .s_rvalid(mrv), .s_rdata(mrd),
+        .s_wdone(mwdone), .s_err(merr),
         .m_cvalid(n_cvalid[j]), .m_cready(n_cready[j]), .m_cwe(n_cwe[j]), .m_caddr(n_caddr[j]),
         .m_wvalid(n_wvalid[j]), .m_wready(n_wready[j]), .m_wdata(n_wdata[j]),
         .m_wmask(n_wmask[j]), .m_rvalid(n_rvalid[j]), .m_rdata(n_rdata[j]),
@@ -167,7 +195,7 @@ module otpu_bcu_sys #(
       assign b_wdone[j] = n_wdone[j];   assign b_err[j] = n_err[j];
     end
     logic bid, rid;                   // (XIDW 1: XDMA's IDs stay in the SmartConnect)
-    otpu_mem_ch #(.XIDW(1)) u_ch (
+    otpu_mem_ch #(.XIDW(1), .ARD(ARD)) u_ch (
       .clk, .rst,
       .n_cvalid(n_cvalid[j]), .n_cready(n_cready[j]), .n_cwe(n_cwe[j]), .n_caddr(n_caddr[j]),
       .n_wvalid(n_wvalid[j]), .n_wready(n_wready[j]), .n_wdata(n_wdata[j]),
@@ -196,10 +224,11 @@ module otpu_bcu_sys #(
   otpu_board #(.S(S), .D(D), .MCOLS(MCOLS), .ACT_ROWS(ACT_ROWS), .ACT_BLOCKS(ACT_BLOCKS),
                .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS), .FIFO_DEPTH(FIFO_DEPTH),
                .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB), .MXU_IMPL(MXU_IMPL),
-               .MXU_CL(MXU_CL), .VPU_CL(VPU_CL), .ULANES(ULANES), .CORE_KHZ(CORE_KHZ),
+               .MXU_CL(MXU_CL), .MXU_E(MXU_E), .VPU_CL(VPU_CL), .ULANES(ULANES), .CORE_KHZ(CORE_KHZ),
                .BUILD_ID(BUILD_ID), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH),
                .PQ_WIN(PQ_WIN), .HAS_I2C(1'b0), .CHASH(CHASH), .DSTEP(DSTEP),
                .HOSTCAL(1'b0), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM), .ARCH_HASH(ARCH_HASH),
+               .CH_LOG2(CH_LOG2),
                .TMEM_IMPL(TMEM_IMPL), .TMEM_RQ(TMEM_RQ),
                .TMEM_NSB(TMEM_NSB), .TMEM_SBP(TMEM_SBP), .TMEM_SBH(TMEM_SBH), .TMEM_RPL(TMEM_RPL), .TMEM_TDP(TMEM_TDP),
                .TMEM_GST(TMEM_GST), .TMEM_PMP(TMEM_PMP), .TMEM_PRK(TMEM_PRK), .TMEM_SDM(TMEM_SDM)) u_board (

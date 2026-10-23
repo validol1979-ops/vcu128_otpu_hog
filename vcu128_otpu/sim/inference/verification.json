@@ -1,0 +1,68 @@
+{
+  "date_utc": "2026-10-20T10:04:31.151861+00:00",
+  "base_sha": "d3cadc37ea744d2bdb2e7bb35b469eedc0145f5c",
+  "working_tree": "new simulation/doc files, uncommitted",
+  "tools": {
+    "QuestaSim": "2024.1",
+    "Octave": "8.4.0",
+    "MATLAB/Simulink": "not found; SLX generator untested"
+  },
+  "checks": {
+    "run_demo.sh": "exit 0",
+    "test_otpu": "ALL TESTS PASSED",
+    "mxu_outputs_bit_exact": 40,
+    "mxu_configurations": [
+      "M=1 N=8 K=384",
+      "M=4 N=8 K=384"
+    ],
+    "llm_replay_events": 570,
+    "html": "Firefox headless screenshot (kv_write event) viewed 2026-10-20",
+    "diagrams": "3 XML pages; SVG/PDF exported and viewed",
+    "run_flow_false": "exit 0; final frame viewed",
+    "git_diff_check": "pass",
+    "routes": "flow_route.m / prepare.py aligned with upstream otpu_slice paths (QST KV write, attention MM on MXU) 2026-10-20"
+  },
+  "logs": "sim/inference/out/{demo,octave,mxu,llm,flow,compile}.log",
+  "limitations": [
+    "Numerical LLM uses random weights and estimated tensor timings (cycle view: ../lens)",
+    "RTL test covers MXU UNIT INT8; full LLM is event replay, tb_llm_replay verifies nothing numerically",
+    "Simulink generator has not been executed"
+  ],
+  "sha256": {
+    "vcu128_otpu/sim/inference/questa_compat.py": "a95fb7c6bed0b84573da9f677807730ef00e5dd6b8d004669163a56ded8fc0c0",
+    "vcu128_otpu/sim/inference/README.md": "0eda93fb3a703c84289f461ecca892de20122c57e3f5f461c603128d81041ab5",
+    "vcu128_otpu/sim/inference/.gitignore": "744a1502c1d7ad664e0677975e40beb6cf6abfe3f49da5311af22b109a50af68",
+    "vcu128_otpu/sim/inference/tb_mxu.sv": "7727d74334323b4b8dd027466217b55c7163abb33bb32c266c360b6de55e6ed8",
+    "vcu128_otpu/sim/inference/replay_waves.do": "ad50623877d87bcd3e97d4e7bb68c30c2e8a7c7fe6da480932d9ea6bb151c0a1",
+    "vcu128_otpu/sim/inference/waves.do": "91be7e981adda5e783959c46e5aaea2230b1bec3c76046d4e539bf2c2bfd5334",
+    "vcu128_otpu/sim/inference/player.html": "5e534a8d3dd1cb802e39b8c76815763bf1bd29fbf8b4c4959b6b5b0392c358a5",
+    "vcu128_otpu/sim/inference/run_questa.sh": "0bf2439e813da6aa53cb3ecd6d794b5d5a3c837ae12ad0fc7369d0ddae2fe72c",
+    "vcu128_otpu/sim/inference/tb_llm_replay.sv": "1ad694ef8c2222fcd99cf8559f36203f481a90f4b98362b46448a99b09e80bd5",
+    "vcu128_otpu/sim/inference/prepare.py": "f9b0bf966844bebc7bc75f4aabed47e1ffb56e4b827deb13a3038c87495f1f00",
+    "vcu128_otpu/sim/inference/run_demo.sh": "83c5a76472f05afd3be11a07a54f4f875b291d3648ebfa0e81a83eb441aff157",
+    "vcu128_otpu/doc/diagrams/structure_02.dot": "2268ed0f928ea9cf07068024dc16965565e8de25b5ffc9f3cd335410881bdf55",
+    "vcu128_otpu/doc/diagrams/structure_01.dot": "765abca20f10576bd32a9da953139a7638513dab33e6edc8c371ab7ba698a145",
+    "vcu128_otpu/doc/diagrams/structure_03.dot": "ed7f7f1a58077d32a59a7834fb7d2c8fbb5660e864ee86ae56509f6eb8a3cafc",
+    "vcu128_otpu/doc/diagrams/structure_01.pdf": "847d540731d64eeebdbf818810e1ce98a7b04f523d2bcf00d24202dce54b05e2",
+    "vcu128_otpu/doc/diagrams/structure_02.svg": "d42d551a2898864861dbd154e87915d0464b6ced4d04202dbabfbd292ead1a3c",
+    "vcu128_otpu/doc/diagrams/structure_03.pdf": "2c03fbfab46516ee1a953c7e6be7f4d20a98ec9b807b342cb38ac8c30131853b",
+    "vcu128_otpu/doc/diagrams/structure_03.svg": "7adf1a5ff28f9868ce2cfe9cdd68d0162ae1a4f56a5fb04eef293b6cce5fa29a",
+    "vcu128_otpu/doc/diagrams/structure_02.pdf": "d594b9602e268717f854c742e22c8d125a43c03a8075f7bf53ac31ab6b87785f",
+    "vcu128_otpu/doc/diagrams/structure_01.svg": "dc28ed7b8be0f7795037ae6e7732639fa4aacc7226d31eec298c69a31d0cacbb",
+    "vcu128_otpu/doc/diagrams/project_structure.drawio": "1e50d956aaef30049f0c0b2196327686ebd1573c183234a3555f3c83e4a69af1",
+    "vcu128_otpu/sim/matlab/run_flow.m": "52b6f4df4bf37185b76aede2696a766e8dd024057709dcccd055a4a592f92f57",
+    "vcu128_otpu/sim/matlab/+otpu/flow_route.m": "d5f849a8bd9e8680c854c3fcedae6ff00fa1cd31d024b65395f7fa7be92dd8ad",
+    "vcu128_otpu/sim/matlab/build_flow_simulink.m": "079a5b6b453812415ff2fa6903c88362eae0d54f2b97a10349fea1957fee434a",
+    "vcu128_otpu/sim/matlab/+otpu/kv_bytes.m": "4493a10290450682bd9f44f35395db7aacc492394c46189a252c5e729b7c0353",
+    "vcu128_otpu/sim/matlab/+otpu/llm_step.m": "f427c8fc0fe17ac90213d4e29907316bfa2072de3624db525264a94d898d3e06",
+    "vcu128_otpu/sim/matlab/+otpu/llm_profile.m": "2ad31de8fec48e1d5ad774e0c21ec034951916bf78ed0659175780280f17b7bc"
+  },
+  "artifact_sha256": {
+    "llm_flow.html": "8f51ca372354e25a39ad9dce5be74d58d9ebb84b43f82ed75b862d16cb27ce0d",
+    "mxu_flow.csv": "3ed3981ddaa885720a530763d37ce56b3660f2e2dbe3f2da7779aedfa44ee8d3",
+    "llm_events.txt": "494017eb76751a407cb7c662aea7dfe2a28a612f4936f73a0c2858ee0a661416",
+    "mxu.wlf": "b373a237c945560c8db40f0044ff4690630efbc16ef64904cf15ca283f6d0572",
+    "llm.wlf": "11e77ec193466415f10362136868e83c92826d3d7c9a238b8530cb1a6f0b2fde",
+    "player.png": "92960240b74f199ffd12621a02f93a580a4f3a0eccec19ef1dc6fe95fcd4c7eb"
+  }
+}

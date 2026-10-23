@@ -21,7 +21,7 @@
 module otpu_eth_bridge
     import eth40_pkg::*;
 #(
-    parameter int NC     = 2,           // каналов памяти (2 или 4)
+    parameter int NC     = 2,           // каналов памяти (1..8: S = 1, 2, 4)
     parameter int RXB    = 131072,      // байт кадровой FIFO приёма
     parameter int TXDB   = 32768,       // байт FIFO кадров данных чтения
     parameter int TXCB   = 8192,        // байт FIFO служебных ответов
@@ -97,7 +97,7 @@ module otpu_eth_bridge
     output logic [NEV-1:0]       ev,
     output logic [31:0]          status
 );
-    initial if (NC < 1 || NC > 4) $fatal(1, "otpu_eth_bridge: NC must be 1..4");
+    initial if (NC < 1 || NC > 8) $fatal(1, "otpu_eth_bridge: NC must be 1..8");
 
     // ---------------------------------------------------------------- приём
     logic [255:0] f_tdata;

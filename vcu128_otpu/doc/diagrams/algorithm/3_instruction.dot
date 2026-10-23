@@ -1,0 +1,39 @@
+// Level 3: one instruction in the sequencer (otpu_seq: fetch, window, scoreboard, units).
+digraph instr {
+  graph [fontname="Helvetica", fontsize=12, labelloc=t, nodesep=0.4, ranksep=0.45,
+         label="Уровень 3. Жизнь одной инструкции в секвенсоре (otpu_seq, окно WIN = 16)"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9, color="#396484"];
+  start [shape=circle, label="", width=0.25, style=filled, fillcolor="#17324d"];
+  done [shape=doublecircle, label="", width=0.2, style=filled, fillcolor="#17324d"];
+  fetch [label="FETCH\nIMEM[pc] → ir\n(1 инструкция/такт)"];
+  decode [label="DECODE\nw1 += R[ra], w2 += R[rb],\nw3 += R[rc]"];
+  scalar [label="EXEC_IN_SEQ\nNOP, LI, ADDI, LOOP\n(счётчики циклов)", fillcolor="#f0e6ff"];
+  full [label="WINDOW_FULL\nстоп выборки"];
+  dispatch [label="DISPATCH\nв слот окна + отпечаток:\nдиапазоны TMEM / HBM / ACT\n(чтение и запись)"];
+  deps [label="WAIT_DEPS\nRAW / WAR / WAW с более\nстарыми в полёте", fillcolor="#fff4d6"];
+  ready [label="READY\nвсе зависимости сняты"];
+  busy [label="WAIT_UNIT\nблок занят более\nстарой инструкцией"];
+  exec [label="EXECUTE\nDMA: LD/ST/DSTEP · MXU: MM\nQUANT: QACT/QST · VPU: VOP\nCOLL: RLD/BAR", fillcolor="#e6f4ea"];
+  retire [label="RETIRE\nudone, слот свободен\nICOUNT++"];
+  rld [label="RLD_HOLD\nвыборка стоит до\nвозврата значения в R[rd]", fillcolor="#f0e6ff"];
+  halt [label="HALT\nждать, пока окно\nопустеет"];
+
+  start -> fetch -> decode;
+  decode -> scalar [label="скалярная"];
+  scalar -> fetch [label="pc+1 / переход LOOP"];
+  decode -> full [label="нет свободного слота"];
+  full -> dispatch [label="слот освободился"];
+  decode -> dispatch [label="блочная"];
+  decode -> halt [label="HALT"];
+  dispatch -> fetch [label="следующая (не ждёт!)", style=dashed];
+  dispatch -> deps;
+  deps -> ready [label="старшие конфликтующие\nзавершены"];
+  ready -> busy [label="блок занят"];
+  busy -> exec [label="самая старая готовая\nдля этого блока"];
+  ready -> exec [label="блок свободен"];
+  exec -> retire -> done;
+  dispatch -> rld [label="RLD"];
+  rld -> fetch [label="значение пришло"];
+  halt -> done [label="окно пусто →\nSTATUS.HALTED (уровень 2)"];
+}

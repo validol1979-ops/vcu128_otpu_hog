@@ -20,7 +20,7 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 from cocotb.utils import get_sim_time
 from cocotbext.axi import AxiBus, AxiMaster
 
-from hbm_model import Cfg, HbmModel, default_beat, hbm_map
+from hbm_model import PCB, Cfg, HbmModel, default_beat, hbm_map
 
 N = int(os.environ.get("HBM_N", "20000"))
 SEED = int(os.environ.get("SEED", "1"))
@@ -28,9 +28,11 @@ OUT = Path(os.environ.get("HBM_OUT", "."))
 TAG = os.environ.get("HBM_TAG", "sys")
 CLK_PS = int(os.environ.get("SYS_CLK_PS", "10000"))     # ускоритель: 100 МГц
 XCLK_PS = 6400                                           # 156,25 МГц
-UCLK_PS = 4444                                           # 225 МГц
+UCLK_PS = int(os.environ.get("SYS_UCLK_PS", "4444"))     # 225 МГц
+NS = int(os.environ.get("HBM_NS", "1"))                  # AXI-портов на native-порт
+NA = 2 * NS
 FULL = (1 << 64) - 1
-XBASE = 1 << 30                                          # окно XDMA: beat бит 24
+XBASE = 1 << (27 + PCB)                                  # окно XDMA: верхняя половина канала
 
 
 class Ref:
@@ -94,6 +96,7 @@ class NMaster:
         self.wdone = 0
         self.errors = []
         self.t_first = self.t_last = None
+        self.t_first_r = None                 # первые данные чтения (установившийся поток)
 
     def err(self, msg):
         if len(self.errors) < 30:
@@ -158,6 +161,8 @@ class NMaster:
                 beat, e = self.exp.popleft()
                 got = d.n_rdata.value.to_unsigned()
                 self.n_rdata += 1
+                if self.t_first_r is None:
+                    self.t_first_r = now
                 self.t_last = now
                 if got != e:
                     self.err(f"{now} нс: n: beat {beat:#x}: прочитано {got:#x}, ожидалось {e:#x}")
@@ -173,10 +178,10 @@ class Env:
     def __init__(self, dut, cfg, rng):
         self.dut, self.rng = dut, rng
         self.ref = Ref()
-        self.model = HbmModel(dut, rng, cfg)
+        self.model = HbmModel(dut, rng, cfg, nports=NA)
         self.n = NMaster(dut, rng, self.ref)
         self.cdiag = {"rv2": 0}
-        self.t_lastb = None
+        self.t_lastb = self.t_firstb = None
         self.stop = False
 
     async def uloop(self):
@@ -191,6 +196,8 @@ class Env:
             for pm in m.ports:
                 if pm.bvalid:
                     self.t_lastb = get_sim_time("ns")
+                    if self.t_firstb is None:
+                        self.t_firstb = self.t_lastb
             if d.c_rdata_valid.value.to_unsigned() == 3:
                 self.cdiag["rv2"] += 1
 
@@ -286,7 +293,7 @@ async def x_worker(axi, ref, rng, base, size, ops, stats, errors):
 def status(dut):
     def arr(sig, w):
         v = sig.value.to_unsigned()
-        return [(v >> (w * p)) & ((1 << w) - 1) for p in range(2)]
+        return [(v >> (w * a)) & ((1 << w) - 1) for a in range(NA)]
     return dict(rcmd=arr(dut.st_rcmd, 32), wcmd=arr(dut.st_wcmd, 32), dep=arr(dut.st_dep, 32),
                 rout=arr(dut.st_rout, 7), wout=arr(dut.st_wout, 7),
                 busy=dut.st_busy.value.to_unsigned(), err_cnt=dut.st_err_cnt.value.to_unsigned(),
@@ -309,7 +316,7 @@ def finish(env, name, extra, errors=()):
             bad += 1
     if bad:
         errs.append(f"итоговая память HBM: {bad} beat не совпали с эталоном")
-    res = dict(test=name, seed=SEED, clk_ps=CLK_PS, xclk_ps=XCLK_PS, uclk_ps=UCLK_PS,
+    res = dict(test=name, seed=SEED, ns=NS, clk_ps=CLK_PS, xclk_ps=XCLK_PS, uclk_ps=UCLK_PS,
                n_reads=env.n.n_rd, n_writes=env.n.n_wr, n_rdata=env.n.n_rdata, n_wdone=env.n.wdone,
                hbm_ar=[pm.n_ar for pm in env.model.ports], hbm_aw=[pm.n_aw for pm in env.model.ports],
                overtakes=sum(pm.overtakes for pm in env.model.ports),
@@ -326,7 +333,7 @@ async def random_both(dut):
     """Ускоритель и XDMA одновременно, случайная модель HBM; затем перекрёстное чтение окон."""
     env, axi = await setup(dut, Cfg(stall=(0.002, 5, 60)), SEED)
     rng = env.rng
-    hot = [rng.randrange(1 << 24) for _ in range(8)] + [rng.randrange(512) for _ in range(8)]
+    hot = [rng.randrange(XBASE >> 6) for _ in range(8)] + [rng.randrange(512) for _ in range(8)]
     env.n.start(n_rand(rng, N, hot))
     stats = dict(xw=0, xr=0, xw_bytes=0, xr_bytes=0)
     xerr = []
@@ -353,8 +360,11 @@ async def random_both(dut):
     finish(env, "random_both", dict(x=stats), xerr)
 
 
+HBM_LAT = int(os.environ.get("SYS_HBM_LAT", "40"))      # задержка модели HBM в потоках, такты uclk
+
+
 async def n_stream(dut, kind, nb):
-    env, axi = await setup(dut, Cfg.fast(40), SEED)
+    env, axi = await setup(dut, Cfg.fast(HBM_LAT), SEED)
     env.n.p_cvalid = env.n.p_wvalid = 1.0
     rng = env.rng
     if kind == "r":
@@ -369,9 +379,17 @@ async def n_stream(dut, kind, nb):
     span_ns = t_end - env.n.t_first
     nbytes = nb * 64
     ucyc = span_ns * 1000 / UCLK_PS
-    res = dict(stream=kind, beats=nb, span_ns=round(span_ns, 1), bytes=nbytes,
+    # установившийся поток: от первого до последнего beat ответа (данные чтения / B), без
+    # задержки первого обращения; B -- по одному на beat (два порта HBM могут дать B в одном
+    # такте, поэтому для записи это оценка снизу точнее, чем по команде)
+    t0_ss = env.n.t_first_r if kind == "r" else env.t_firstb
+    ss_ns = t_end - t0_ss
+    gbps_ss = (nb - 1) * 64 / ss_ns if ss_ns > 0 else 0.0
+    res = dict(stream=kind, hbm_lat=HBM_LAT, beats=nb, span_ns=round(span_ns, 1), bytes=nbytes,
                bytes_per_uclk=round(nbytes / ucyc, 2), gbps=round(nbytes / span_ns, 2),
-               bytes_per_clk=round(nbytes / (span_ns * 1000 / CLK_PS), 2))
+               bytes_per_clk=round(nbytes / (span_ns * 1000 / CLK_PS), 2),
+               gbps_ss=round(gbps_ss, 2), bytes_per_clk_ss=round(gbps_ss * CLK_PS / 1000, 2),
+               core_peak_gbps=round(64 / (CLK_PS / 1000), 2))
     dut._log.info(f"поток ускорителя {kind}: {res}")
     finish(env, f"stream_n_{kind}_clk{CLK_PS}", res)
 

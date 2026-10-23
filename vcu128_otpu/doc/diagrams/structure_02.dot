@@ -1,0 +1,36 @@
+digraph G {
+graph [rankdir=TB, nodesep=0.65, ranksep=1, pad=0.3, fontname="DejaVu Sans", label="02 Compute slice", labelloc=t, fontsize=24];
+node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"];
+edge [fontname="DejaVu Sans", fontsize=10, color="#3d6a8b"];
+imem [label="IMEM\n32768 instructions\nLoader from DRAM",fillcolor="#def2e9"];
+seq [label="otpu_seq\nDispatch WIN=16 / scoreboard\nBAR, HALT, dependencies",fillcolor="#fff0d9"];
+coll [label="Collective / register reads\notpu_coll / RLD\nS=1: no inter-slice reduction",fillcolor="#e3edf9"];
+dma [label="otpu_dma\nLD / ST / DSTEP / STREAM\nTensor transfers / stream tail",fillcolor="#e3edf9"];
+quant [label="otpu_quant\nQACT: FP32 → ACT\nQST: FP32 → DRAM INT8 / scales",fillcolor="#e3edf9"];
+mxu [label="otpu_mxu\nD=128, MCOLS=4\nINT8 / 4-bit systolic dot products",fillcolor="#e3edf9"];
+vpu [label="otpu_vpu\n8 FP32 lanes, VPU_CL=2\nReductions / EXP / RECIP / RSQRT",fillcolor="#e3edf9"];
+tmem [label="otpu_tmem\n65536 FP32 words, 8 banks\nPer-unit read copies, TMEM_IMPL=0",fillcolor="#def2e9"];
+act [label="otpu_actram\n4 rows ×128 blocks ×128 INT8\nSa + group offsets per block",fillcolor="#def2e9"];
+fifo [label="MXU stream + scale FIFOs\nFIFO_DEPTH=1024 in target\nInteger accumulator / FP32 epilogue",fillcolor="#def2e9"];
+arb [label="Slice arbitration\nTMEM all-or-nothing grants\nDRAM B: DMA > MXU",fillcolor="#fff0d9"];
+dram [label="otpu_native_dram → mem_ch → HBM\nA: scale lines, B: chunks / DMA\nSW: QST scalar writes",fillcolor="#def2e9"];
+imem -> seq [label="instructions",style=solid];
+seq -> dma [label="dispatch",style=dashed];
+seq -> quant [label="dispatch",style=dashed];
+seq -> mxu [label="start / go",style=dashed];
+seq -> vpu [label="dispatch",style=dashed];
+seq -> coll [label="dispatch",style=dashed];
+dma -> tmem [label="LD / ST FP32",style=solid];
+tmem -> quant [label="FP32 input",style=solid];
+quant -> act [label="INT8 codes / scale",style=solid];
+act -> mxu [label="stationary activations",style=solid];
+dram -> fifo [label="weights / scales",style=solid];
+fifo -> mxu [label="prefetch / replay",style=solid];
+mxu -> tmem [label="FP32 results",style=solid];
+vpu -> tmem [label="FP32 reads / writes",style=solid];
+coll -> tmem [label="read / write",style=solid];
+dma -> dram [label="bulk data",style=solid];
+quant -> dram [label="QST",style=solid];
+arb -> tmem [label="bank grants",style=dashed];
+arb -> dram [label="port grants",style=dashed];
+}

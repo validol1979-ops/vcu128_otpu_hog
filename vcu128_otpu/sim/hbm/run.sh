@@ -5,7 +5,7 @@ set -euo pipefail
 
 sim_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$sim_dir/../../.." && pwd)"
-venv="$repo_dir/../external/rtl/opentpu/.venv"
+venv="${OTPU_VENV:-$repo_dir/../external/rtl/opentpu/.venv}"   # из worktree: OTPU_VENV=<абсолютный путь>
 out_dir="$sim_dir/out"
 mkdir -p -- "$out_dir"
 export PATH="$HOME/.local/bin:$PATH"

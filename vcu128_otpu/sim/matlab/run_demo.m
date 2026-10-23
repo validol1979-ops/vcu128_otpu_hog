@@ -34,10 +34,10 @@ if make_plots
     f=figure('Visible','off','Position',[100 100 1150 750]);
     subplot(2,2,1); plot(1:r.state.pos,r.token_seconds*1e3,'o-'); grid on;
     xlabel('Consumed token position'); ylabel('Modeled time, ms'); title('Sequential prefill and decode');
-    subplot(2,2,2); kv=2*p.layers*p.kv_heads*(p.hidden/p.heads)*p.kv_bytes*(1:r.state.pos);
+    subplot(2,2,2); kvb=otpu.kv_bytes(p,c,1); kv=kvb.used(1:r.state.pos);
     plot(1:r.state.pos,kv/1024,'o-'); grid on; xlabel('Context tokens'); ylabel('KV-cache, KiB');
     subplot(2,2,3); names={'Weights/embedding/norm','KV read','KV write'};
-    ix=strcmp({trace.op},'attention_kv_read'); iy=strcmp({trace.op},'kv_write');
+    ix=ismember({trace.op},{'attn_scores','attn_pv'}); iy=strcmp({trace.op},'kv_write');
     bar([sum([trace(~ix).read_bytes]),sum([trace(ix).read_bytes]),sum([trace(iy).write_bytes])]/1024);
     set(gca,'XTick',1:3,'XTickLabel',names); ylabel('KiB'); title('HBM traffic');
     subplot(2,2,4); e=trace([trace.token]==r.state.pos);

@@ -1,0 +1,64 @@
+# The VCU128 (AMD, xcvu37p-fsvh2892-2L-e): Virtex UltraScale+ with 8 GB HBM2 (two stacks),
+# QSFP28 x4, no PCIe host link used. The accelerator is the BCU1525's (UltraScale+, DSP48E2 cells,
+# the same shell); its memory channels on HBM through otpu_hbm_port, the host link 40G Ethernet
+# instead of XDMA (doc/design.md). Stage 3 (build B): four slices, the arch values otherwise
+# bcu1525.toml's (f237dab; S = 1 up to f4e41cb, hash 0xff270e6e; S = 2 up to BCFE80D, 0xc6166c02):
+# slice s on channels 2s, 2s + 1, channel j at j x 1 GiB of HBM (mini-switch j: four AXI ports,
+# four pseudo-channels), 2 GiB a slice; HBM and the channels in SLR0, slices 0, 1 in SLR1, 2, 3 in
+# SLR2.
+
+[target]
+name = "vcu128_s4"
+kind = "fpga"
+platform_id = 3
+description = "VCU128: xcvu37p, HBM2 8 GB, 40G Ethernet (QSFP1); 4 slices x 2 channels (Top/otpu_s4)"
+
+[arch]
+S = 4
+D = 128
+MCOLS = 4
+ACT_BLOCKS = 128
+ACT_ROWS = 0
+TMEM_WORDS = 65536
+IMEM_WORDS = 32768
+DRAM_BYTES = 2147483648         # per slice: 1 GiB of each of its two channels (otpu_board CH_LOG2 30)
+LANES = 8
+PAIR = true
+DSTEP = true
+STREAM = true
+SEQ_WC = false                  # the sequencer's wait entries (WAITC, EXPERIMENTAL: docs/seq_vpu.md):
+#                                 the host loads them with every program; needs WIN <= 16
+
+[uarch]
+MXU_IMPL = 2
+MXU_CL = 16
+VPU_CL = 2
+ULANES = 8
+TMEM_IMPL = 0
+RPB = 0
+WPB = 1
+WIN = 16
+FIFO_DEPTH = 1024
+TRACE_DEPTH = 16384
+PQ_WIN = 1024
+CHASH = true
+
+[tech]
+family = "xilinxus"             # rtl/tech/xilinxus: DSP48E2 cells
+part = "xcvu37p-fsvh2892-2L-e"
+vendor = "xilinx"
+
+[platform]
+board = "vcu128"
+core_mhz = 200.0                # stage 2 step 1: 100 MHz up to 9e55549, 150 MHz up to 0d4b15d
+mem = "hbm2"
+mem_mts = 1800                  # HBM2 at 900 MHz (IP default), AXI ports at 225 MHz
+mem_ctrl = "xilinx_hbm"
+hostcal = false
+channels_per_slice = 2
+channel_bytes = 2147483648      # 2 GiB of global HBM address space per channel (channel j at j x this)
+channel_phys_bytes = 2147483648
+beat_bytes = 64
+host = "eth40"                  # 40GBASE-R4 on QSFP1, UDP (doc/eth40_protocol.md)
+pcie_gen = 0
+pcie_lanes = 0

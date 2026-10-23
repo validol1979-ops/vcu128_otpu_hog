@@ -1,0 +1,63 @@
+// Level 5: the program of one decode token (LFM2 / Qwen3 as compiled upstream).
+digraph token {
+  graph [fontname="Helvetica", fontsize=12, labelloc=t, nodesep=0.3, ranksep=0.32, newrank=true,
+         label="Уровень 5. Программа одного токена декода (LFM2 / Qwen3, M = 1)\nв скобках — инструкции; зелёное — MXU, синее — VPU, оранжевое — QUANT, серое — DMA"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=9.5];
+  edge [fontname="Helvetica", fontsize=8.5, color="#396484"];
+  start [shape=circle, label="", width=0.25, style=filled, fillcolor="#17324d"];
+  done [shape=doublecircle, label="", width=0.2, style=filled, fillcolor="#17324d"];
+  inp [label="INPUTS\nx, cos, sin → TMEM (LD)\nили эмбеддинг по ARG", fillcolor="#eeeeee"];
+  layer [label="LAYER l\nадреса слоя: R ← база + l·размер", shape=diamond, fillcolor="#f0e6ff"];
+  rms1 [label="RMS_STAT\nΣx², ·1/H, +eps, rsqrt (VOP)", fillcolor="#dbe9ff"];
+  qx [label="QUANT_X\nx·r·γ → INT8 в ACT\n(QACT RSCALE+CSCALE)", fillcolor="#ffe8cc"];
+
+  subgraph cluster_conv { label="LFM2 short-conv (слои conv)"; style="rounded,dashed"; color="#888888";
+    cin [label="IN_PROJ\nB, C, x' = W_in·x (MM)\nпараллельно LD 2 строк кольца", fillcolor="#d3f0dc"];
+    cbx [label="GATE_BX\nb = B ⊙ x' (VOP)\nST b → кольцо в HBM", fillcolor="#dbe9ff"];
+    cconv [label="CONV\ny = Σ_k taps[k]·b[t−k], k < 3\n⊙ C (VOP)", fillcolor="#dbe9ff"];
+    cout [label="OUT_PROJ\nQACT → MM W_out\nx += (VOP ADD)", fillcolor="#d3f0dc"];
+  }
+  subgraph cluster_att { label="attention (слои attn)"; style="rounded,dashed"; color="#888888";
+    qkv [label="QKV\nMM K, V, Q по группам", fillcolor="#d3f0dc"];
+    rope [label="NORM_ROPE\nq/k-norm, RoPE (VOP)", fillcolor="#dbe9ff"];
+    kvw [label="KV_WRITE\nQST: K-строка, Vᵀ-байты\n+ масштаб → HBM", fillcolor="#ffe8cc"];
+    qq [label="QUANT_Q\nq·log2e/√d → ACT (QACT)", fillcolor="#ffe8cc"];
+    sc [label="SCORES\ns = q·Kᵀ (MM RSC+RMAX)\nK-блок 256 стримится из HBM", fillcolor="#d3f0dc"];
+    sm [label="SOFTMAX\nm' = max, p = 2^(s−m'),\nα = 2^(m−m') (VOP)", fillcolor="#dbe9ff"];
+    qp [label="QUANT_P\np·vs → ACT (QACT)", fillcolor="#ffe8cc"];
+    pv [label="PV\nacc = acc·α + P·Vᵀ\n(MM UNIT+ACC+ASCALE)", fillcolor="#d3f0dc"];
+    nrm [label="NORMALIZE\no = acc / l (VOP)"; fillcolor="#dbe9ff"];
+    oproj [label="O_PROJ\nQACT → MM W_o\nx += (VOP ADD)", fillcolor="#d3f0dc"];
+  }
+  subgraph cluster_mlp { label="MLP (каждый слой)"; style="rounded,dashed"; color="#888888";
+    rms2 [label="RMS + QUANT\n(VOP ×4, QACT)", fillcolor="#ffe8cc"];
+    gu [label="GATE_UP[f]\nMM gate, MM up\n(кусок f по F)", fillcolor="#d3f0dc"];
+    silu [label="SILU\ng·σ(g)·u\n(VOP mul, exp2, add, recip, mul)", fillcolor="#dbe9ff"];
+    down [label="DOWN[f]\nQACT → MM W_down (+ACC)", fillcolor="#d3f0dc"];
+    res [label="RESIDUAL\nx += y (VOP ADD)", fillcolor="#dbe9ff"];
+  }
+  fin [label="FINAL_NORM\nRMS → QACT", fillcolor="#ffe8cc"];
+  head [label="LM_HEAD[c]\nMM по кускам ≤ 8192 строк\n(29 % потока у LFM2.5)", fillcolor="#d3f0dc"];
+  st [label="STORE_LOGITS\nST логиты → HBM", fillcolor="#eeeeee"];
+  halt [label="HALT", fillcolor="#f0e6ff"];
+
+  start -> inp -> layer;
+  layer -> rms1 [label="l < L"];
+  rms1 -> qx;
+  qx -> cin [label="conv"];
+  cin -> cbx -> cconv -> cout;
+  qx -> qkv [label="attn"];
+  qkv -> rope -> kvw -> qq -> sc -> sm -> qp -> pv;
+  pv -> sc [label="следующий блок 256 /\nследующая KV-голова"];
+  pv -> nrm [label="все блоки, все головы"];
+  nrm -> oproj;
+  cout -> rms2; oproj -> rms2;
+  rms2 -> gu -> silu -> down;
+  down -> gu [label="f+1 < F/кусок\n(gate/up f+1 уже стримится)"];
+  down -> res [label="последний кусок"];
+  res -> layer [label="l+1 (LOOP)"];
+  layer -> fin [label="l = L"];
+  fin -> head;
+  head -> head [label="c+1"];
+  head -> st -> halt -> done;
+}

@@ -20,4 +20,10 @@ source /tools/Xilinx/Vivado/2024.2/settings64.sh
 Projects/ и bin/ не редактировать.
 После CREATE `git status` должен быть чистым. Ограничения CDC — Tcl-файлы с
 `nosynth` в `sources.con` (последними; `otpu_mem_ch.tcl` с
-`scoped_to_ref=otpu_mem_ch`, как у upstream).
+`scoped_to_ref=otpu_mem_ch`, как у upstream; `vcu128_thermal.tcl` — размещение трёх
+SYSMONE4 по SLR и переход снимка SYSMON clk100 → core_clk).
+
+Температура на прошитой плате: `vcu128_otpu/tools/otpu_temp.py` (40G) или
+`vcu128_otpu/tools/jtag/thermal.tcl` (JTAG-to-AXI; там же — SYSMON глазами
+hw_manager для сверки); регистры — `vcu128_otpu/doc/design.md`, «Температура и контроль».
+Регрессия модуля — `vcu128_otpu/sim/thermal/run.sh`.

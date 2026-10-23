@@ -1,5 +1,5 @@
 // Тестбенч-обёртка otpu_eth_bridge + eth40_regs для cocotb (Verilator): каналы DMA —
-// плоские порты m0_…m3_ (модели AxiRam cocotbext-axi; AxSIZE 4 и INCR — константы, как
+// плоские порты m0_…m7_ (модели AxiRam cocotbext-axi; AxSIZE 4 и INCR — константы, как
 // их подразумевает otpu_mem_ch), AXI-Lite моста — простой декодер: окно 0x5xxxx — eth40_regs,
 // остальное — порт r_* (модель AxiLiteRam). Мост держит не больше одной транзакции AXI-Lite
 // и не меняет адрес до её конца, поэтому декодер комбинационный.
@@ -56,6 +56,50 @@ module tb_eth40 #(
     input  logic [127:0] m3_rdata, input logic [1:0] m3_rresp, input logic m3_rlast,
     input  logic         m3_rvalid, output logic m3_rready,
     output logic [0:0]   m3_awid, m3_arid, input logic [0:0] m3_bid, m3_rid,
+    // канал 4
+    output logic [30:0]  m4_awaddr, output logic [7:0] m4_awlen, output logic [2:0] m4_awsize,
+    output logic [1:0]   m4_awburst, output logic m4_awvalid, input logic m4_awready,
+    output logic [127:0] m4_wdata, output logic [15:0] m4_wstrb, output logic m4_wlast,
+    output logic         m4_wvalid, input logic m4_wready,
+    input  logic [1:0]   m4_bresp, input logic m4_bvalid, output logic m4_bready,
+    output logic [30:0]  m4_araddr, output logic [7:0] m4_arlen, output logic [2:0] m4_arsize,
+    output logic [1:0]   m4_arburst, output logic m4_arvalid, input logic m4_arready,
+    input  logic [127:0] m4_rdata, input logic [1:0] m4_rresp, input logic m4_rlast,
+    input  logic         m4_rvalid, output logic m4_rready,
+    output logic [0:0]   m4_awid, m4_arid, input logic [0:0] m4_bid, m4_rid,
+    // канал 5
+    output logic [30:0]  m5_awaddr, output logic [7:0] m5_awlen, output logic [2:0] m5_awsize,
+    output logic [1:0]   m5_awburst, output logic m5_awvalid, input logic m5_awready,
+    output logic [127:0] m5_wdata, output logic [15:0] m5_wstrb, output logic m5_wlast,
+    output logic         m5_wvalid, input logic m5_wready,
+    input  logic [1:0]   m5_bresp, input logic m5_bvalid, output logic m5_bready,
+    output logic [30:0]  m5_araddr, output logic [7:0] m5_arlen, output logic [2:0] m5_arsize,
+    output logic [1:0]   m5_arburst, output logic m5_arvalid, input logic m5_arready,
+    input  logic [127:0] m5_rdata, input logic [1:0] m5_rresp, input logic m5_rlast,
+    input  logic         m5_rvalid, output logic m5_rready,
+    output logic [0:0]   m5_awid, m5_arid, input logic [0:0] m5_bid, m5_rid,
+    // канал 6
+    output logic [30:0]  m6_awaddr, output logic [7:0] m6_awlen, output logic [2:0] m6_awsize,
+    output logic [1:0]   m6_awburst, output logic m6_awvalid, input logic m6_awready,
+    output logic [127:0] m6_wdata, output logic [15:0] m6_wstrb, output logic m6_wlast,
+    output logic         m6_wvalid, input logic m6_wready,
+    input  logic [1:0]   m6_bresp, input logic m6_bvalid, output logic m6_bready,
+    output logic [30:0]  m6_araddr, output logic [7:0] m6_arlen, output logic [2:0] m6_arsize,
+    output logic [1:0]   m6_arburst, output logic m6_arvalid, input logic m6_arready,
+    input  logic [127:0] m6_rdata, input logic [1:0] m6_rresp, input logic m6_rlast,
+    input  logic         m6_rvalid, output logic m6_rready,
+    output logic [0:0]   m6_awid, m6_arid, input logic [0:0] m6_bid, m6_rid,
+    // канал 7
+    output logic [30:0]  m7_awaddr, output logic [7:0] m7_awlen, output logic [2:0] m7_awsize,
+    output logic [1:0]   m7_awburst, output logic m7_awvalid, input logic m7_awready,
+    output logic [127:0] m7_wdata, output logic [15:0] m7_wstrb, output logic m7_wlast,
+    output logic         m7_wvalid, input logic m7_wready,
+    input  logic [1:0]   m7_bresp, input logic m7_bvalid, output logic m7_bready,
+    output logic [30:0]  m7_araddr, output logic [7:0] m7_arlen, output logic [2:0] m7_arsize,
+    output logic [1:0]   m7_arburst, output logic m7_arvalid, input logic m7_arready,
+    input  logic [127:0] m7_rdata, input logic [1:0] m7_rresp, input logic m7_rlast,
+    input  logic         m7_rvalid, output logic m7_rready,
+    output logic [0:0]   m7_awid, m7_arid, input logic [0:0] m7_bid, m7_rid,
     // регистры вне окна eth40_regs
     output logic [19:0]  r_awaddr, output logic r_awvalid, input logic r_awready,
     output logic [31:0]  r_wdata, output logic [3:0] r_wstrb, output logic r_wvalid,
@@ -178,6 +222,86 @@ module tb_eth40 #(
     assign m3_awid = 1'b0; assign m3_arid = 1'b0;
     assign m3_awsize = 3'd4; assign m3_awburst = 2'b01;
     assign m3_arsize = 3'd4; assign m3_arburst = 2'b01;
+
+    if (4 < NC) begin : g_c4
+        assign m4_awaddr = x_awaddr[4]; assign m4_awlen = x_awlen[4];
+        assign m4_awvalid = x_awvalid[4]; assign x_awready[4] = m4_awready;
+        assign m4_wdata = x_wdata[4]; assign m4_wstrb = x_wstrb[4]; assign m4_wlast = x_wlast[4];
+        assign m4_wvalid = x_wvalid[4]; assign x_wready[4] = m4_wready;
+        assign x_bresp[4] = m4_bresp; assign x_bvalid[4] = m4_bvalid; assign m4_bready = x_bready[4];
+        assign m4_araddr = x_araddr[4]; assign m4_arlen = x_arlen[4];
+        assign m4_arvalid = x_arvalid[4]; assign x_arready[4] = m4_arready;
+        assign x_rdata[4] = m4_rdata; assign x_rresp[4] = m4_rresp; assign x_rlast[4] = m4_rlast;
+        assign x_rvalid[4] = m4_rvalid; assign m4_rready = x_rready[4];
+    end else begin : g_n4
+        assign m4_awaddr = '0; assign m4_awlen = '0; assign m4_awvalid = 1'b0;
+        assign m4_wdata = '0; assign m4_wstrb = '0; assign m4_wlast = 1'b0; assign m4_wvalid = 1'b0;
+        assign m4_bready = 1'b1; assign m4_araddr = '0; assign m4_arlen = '0;
+        assign m4_arvalid = 1'b0; assign m4_rready = 1'b1;
+    end
+    assign m4_awid = 1'b0; assign m4_arid = 1'b0;
+    assign m4_awsize = 3'd4; assign m4_awburst = 2'b01;
+    assign m4_arsize = 3'd4; assign m4_arburst = 2'b01;
+
+    if (5 < NC) begin : g_c5
+        assign m5_awaddr = x_awaddr[5]; assign m5_awlen = x_awlen[5];
+        assign m5_awvalid = x_awvalid[5]; assign x_awready[5] = m5_awready;
+        assign m5_wdata = x_wdata[5]; assign m5_wstrb = x_wstrb[5]; assign m5_wlast = x_wlast[5];
+        assign m5_wvalid = x_wvalid[5]; assign x_wready[5] = m5_wready;
+        assign x_bresp[5] = m5_bresp; assign x_bvalid[5] = m5_bvalid; assign m5_bready = x_bready[5];
+        assign m5_araddr = x_araddr[5]; assign m5_arlen = x_arlen[5];
+        assign m5_arvalid = x_arvalid[5]; assign x_arready[5] = m5_arready;
+        assign x_rdata[5] = m5_rdata; assign x_rresp[5] = m5_rresp; assign x_rlast[5] = m5_rlast;
+        assign x_rvalid[5] = m5_rvalid; assign m5_rready = x_rready[5];
+    end else begin : g_n5
+        assign m5_awaddr = '0; assign m5_awlen = '0; assign m5_awvalid = 1'b0;
+        assign m5_wdata = '0; assign m5_wstrb = '0; assign m5_wlast = 1'b0; assign m5_wvalid = 1'b0;
+        assign m5_bready = 1'b1; assign m5_araddr = '0; assign m5_arlen = '0;
+        assign m5_arvalid = 1'b0; assign m5_rready = 1'b1;
+    end
+    assign m5_awid = 1'b0; assign m5_arid = 1'b0;
+    assign m5_awsize = 3'd4; assign m5_awburst = 2'b01;
+    assign m5_arsize = 3'd4; assign m5_arburst = 2'b01;
+
+    if (6 < NC) begin : g_c6
+        assign m6_awaddr = x_awaddr[6]; assign m6_awlen = x_awlen[6];
+        assign m6_awvalid = x_awvalid[6]; assign x_awready[6] = m6_awready;
+        assign m6_wdata = x_wdata[6]; assign m6_wstrb = x_wstrb[6]; assign m6_wlast = x_wlast[6];
+        assign m6_wvalid = x_wvalid[6]; assign x_wready[6] = m6_wready;
+        assign x_bresp[6] = m6_bresp; assign x_bvalid[6] = m6_bvalid; assign m6_bready = x_bready[6];
+        assign m6_araddr = x_araddr[6]; assign m6_arlen = x_arlen[6];
+        assign m6_arvalid = x_arvalid[6]; assign x_arready[6] = m6_arready;
+        assign x_rdata[6] = m6_rdata; assign x_rresp[6] = m6_rresp; assign x_rlast[6] = m6_rlast;
+        assign x_rvalid[6] = m6_rvalid; assign m6_rready = x_rready[6];
+    end else begin : g_n6
+        assign m6_awaddr = '0; assign m6_awlen = '0; assign m6_awvalid = 1'b0;
+        assign m6_wdata = '0; assign m6_wstrb = '0; assign m6_wlast = 1'b0; assign m6_wvalid = 1'b0;
+        assign m6_bready = 1'b1; assign m6_araddr = '0; assign m6_arlen = '0;
+        assign m6_arvalid = 1'b0; assign m6_rready = 1'b1;
+    end
+    assign m6_awid = 1'b0; assign m6_arid = 1'b0;
+    assign m6_awsize = 3'd4; assign m6_awburst = 2'b01;
+    assign m6_arsize = 3'd4; assign m6_arburst = 2'b01;
+
+    if (7 < NC) begin : g_c7
+        assign m7_awaddr = x_awaddr[7]; assign m7_awlen = x_awlen[7];
+        assign m7_awvalid = x_awvalid[7]; assign x_awready[7] = m7_awready;
+        assign m7_wdata = x_wdata[7]; assign m7_wstrb = x_wstrb[7]; assign m7_wlast = x_wlast[7];
+        assign m7_wvalid = x_wvalid[7]; assign x_wready[7] = m7_wready;
+        assign x_bresp[7] = m7_bresp; assign x_bvalid[7] = m7_bvalid; assign m7_bready = x_bready[7];
+        assign m7_araddr = x_araddr[7]; assign m7_arlen = x_arlen[7];
+        assign m7_arvalid = x_arvalid[7]; assign x_arready[7] = m7_arready;
+        assign x_rdata[7] = m7_rdata; assign x_rresp[7] = m7_rresp; assign x_rlast[7] = m7_rlast;
+        assign x_rvalid[7] = m7_rvalid; assign m7_rready = x_rready[7];
+    end else begin : g_n7
+        assign m7_awaddr = '0; assign m7_awlen = '0; assign m7_awvalid = 1'b0;
+        assign m7_wdata = '0; assign m7_wstrb = '0; assign m7_wlast = 1'b0; assign m7_wvalid = 1'b0;
+        assign m7_bready = 1'b1; assign m7_araddr = '0; assign m7_arlen = '0;
+        assign m7_arvalid = 1'b0; assign m7_rready = 1'b1;
+    end
+    assign m7_awid = 1'b0; assign m7_arid = 1'b0;
+    assign m7_awsize = 3'd4; assign m7_awburst = 2'b01;
+    assign m7_arsize = 3'd4; assign m7_arburst = 2'b01;
 
     // декодер AXI-Lite
     wire w5 = awaddr[19:16] == 4'h5;

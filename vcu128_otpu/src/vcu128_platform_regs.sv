@@ -19,6 +19,26 @@
 //                        [30:24] TXMAINCURSOR; one setting for all lanes (boot 24/0/4/80)
 //   0x18 ETH_RECOVER R   [15:0] automatic/requested RX recoveries
 //   0x1C SCRATCH     R/W
+//   0x20 .. 0x5C     thermal monitor and protection (vcu128_thermal; doc/design.md
+//                    "Температура и контроль"):
+//   0x20 TH_INFO     R   [3:0] SLRs (3), [7:4] master SLR (0), [15:8] version (1), [16] 1
+//   0x24 TH_CTRL     R/W [0] ACT_EN (reset 1): hold the accelerator on an alarm,
+//                        [1] AUTO_RESUME (0), [2] CATTRIP_ACT (1): HBM CATTRIP holds too,
+//                        [3] FORCE_HOLD (0); W1: [8] RESUME, [9] clear flags, [10] clear maxima
+//   0x28 TH_STATUS   R   [0] WARN, [1] ALARM, [2] CATTRIP, [3] HOLD, [4] WARN sticky,
+//                        [5] ALARM sticky, [6] CATTRIP sticky, [7] HOLD sticky, [8] COOL (no
+//                        alarm, no counted CATTRIP), [9] every SLR read, [10] DRP timeout
+//                        sticky, [20:16] / [28:24] sensors' WARN / ALARM sticky
+//                        (SLR0, SLR1, SLR2, HBM0, HBM1)
+//   0x2C TH_FPGA_LIM R/W [7:0] warn C (85), [15:8] alarm C (100), [23:16] hysteresis C (10)
+//   0x30 TH_HBM_LIM  R/W the same for HBM (85, 95, 5)
+//   0x34 TH_EVENTS   R   [15:0] HOLD entries, [31:16] WARN rises
+//   0x38 TH_RAW      R   [11:0] the code given to otpu_board temp (hottest SLR), [18:16] OT
+//   0x3C TH_ABORTS   R   [15:0] CTRL = 0 writes done by vcu128_ctl_guard
+//   0x40 + 4s T_SLRs R   [15:0] current, [31:16] maximum, signed 1/16 C (0x8000: none)
+//   0x4C T_HBM       R   [7:0] / [15:8] stack 0 / 1 current, [23:16] / [31:24] maximum, C
+//   0x50 + 4s V_SLRs R   [9:0] VCCINT, [19:10] VCCAUX, [29:20] VCCBRAM: code x 3 V / 1024
+//   STATUS also [19] thermal WARN, [20] ALARM sticky, [21] HOLD.
 
 module vcu128_platform_regs (
     input  logic        clk,
@@ -68,7 +88,18 @@ module vcu128_platform_regs (
     output logic [4:0]  gt_txdiffctrl,
     output logic [4:0]  gt_txprecursor,
     output logic [4:0]  gt_txpostcursor,
-    output logic [6:0]  gt_txmaincursor
+    output logic [6:0]  gt_txmaincursor,
+
+    // thermal (vcu128_sysmon, clk100: stable while sm_tog does not change)
+    input  logic [2:0][3:0][15:0] sm_snap,
+    input  logic [2:0]  sm_valid,
+    input  logic [2:0]  sm_err,
+    input  logic        sm_tog,
+    input  logic [2:0]  sm_ot,
+    input  logic [15:0] th_n_abort_s,
+    output logic        th_hold,            // clk
+    output logic        th_abort,           // one-cycle pulse
+    output logic [11:0] th_temp_code
 );
 
     localparam logic [31:0] ID = 32'h56313238;   // "V128"
@@ -89,6 +120,21 @@ module vcu128_platform_regs (
             c_qsfp_present_n, c_qsfp_int_n, c_aligned, c_hi_ber, c_pg, c_lock} = s2;
 
     logic [31:0] scratch;
+
+    // thermal monitor (registers 0x20 .. 0x5C)
+    wire         th_wr = s_axil_awready && s_axil_awaddr[7:0] >= 8'h20 && s_axil_awaddr[7:0] < 8'h60;
+    logic [31:0] th_rdata;
+    logic        th_rhit, th_warn, th_alarm_l;
+    vcu128_thermal #(.NSLR (3), .MASTER_SLR (0)) u_thermal (
+        .clk, .rst,
+        .sm_snap, .sm_valid, .sm_err, .sm_tog, .sm_ot,
+        .hbm_temp0 (c_temp0), .hbm_temp1 (c_temp1), .hbm_valid (&c_calib), .hbm_cattrip (c_cattrip),
+        .n_abort (th_n_abort_s),
+        .wr (th_wr), .waddr (s_axil_awaddr[7:0]), .wdata (s_axil_wdata),
+        .raddr (s_axil_araddr[7:0]), .rdata (th_rdata), .rhit (th_rhit),
+        .hold (th_hold), .stop (th_abort), .temp_code (th_temp_code),
+        .st_warn (th_warn), .st_alarm_l (th_alarm_l)
+    );
 
     // Write channel: AW and W together
     assign s_axil_awready = !s_axil_bvalid && s_axil_awvalid && s_axil_wvalid;
@@ -126,7 +172,7 @@ module vcu128_platform_regs (
                     end
                     8'h1C: for (int b = 0; b < 4; b++)
                                if (s_axil_wstrb[b]) scratch[8 * b +: 8] <= s_axil_wdata[8 * b +: 8];
-                    default: s_axil_bresp <= (s_axil_awaddr[7:0] < 8'h20) ? 2'b00 : 2'b10;
+                    default: s_axil_bresp <= (s_axil_awaddr[7:0] < 8'h60) ? 2'b00 : 2'b10;
                 endcase
             end
         end
@@ -142,7 +188,7 @@ module vcu128_platform_regs (
         rd_ok = 1'b1;
         case (s_axil_araddr[7:0])
             8'h00: rd = ID;
-            8'h04: rd = {13'd0, c_uclk_locked, c_lock, c_pg, c_hi_ber, c_aligned, eth_rx_status_s,
+            8'h04: rd = {10'd0, th_hold, th_alarm_l, th_warn, c_uclk_locked, c_lock, c_pg, c_hi_ber, c_aligned, eth_rx_status_s,
                          !c_qsfp_int_n, !c_qsfp_present_n, c_cattrip, c_calib, c_core_locked};
             8'h08: rd = {17'd0, c_temp1, 1'b0, c_temp0};
             8'h0C: rd = {24'd0, c_err};
@@ -151,7 +197,10 @@ module vcu128_platform_regs (
                          3'd0, gt_txdiffctrl};
             8'h18: rd = {16'd0, eth_recover_count_s};
             8'h1C: rd = scratch;
-            default: rd_ok = 1'b0;
+            default: begin
+                rd    = th_rdata;
+                rd_ok = th_rhit;
+            end
         endcase
     end
 

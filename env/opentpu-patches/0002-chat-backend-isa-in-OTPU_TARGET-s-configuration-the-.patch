@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:54:23 +0300
+Subject: [PATCH 2/8] chat: --backend isa in OTPU_TARGET's configuration; the
+ configuration in the log
+
+With OTPU_TARGET set, make_backend('isa') returns the target's Config (the
+hardware's truth, opentpu.target.config) instead of None, which left Qwen3.5 /
+LFM2 on the design point (two slices, MCOLS 8, LANES 16, no PAIR/DSTEP/STREAM):
+another machine with other roundings, silently, so a card's long answer looked
+like a divergence from the ISA (vcu128_otpu, 21.10.2026: the design-point ISA
+and the card parted at token 37 on a near tie; in the card's configuration
+128 of 128 tokens agreed). Without OTPU_TARGET nothing changes. Every chat now
+prints 'config: S= D= MCOLS= LANES= ... hash' after loading.
+
+diff --git a/opentpu/host/chat.py b/opentpu/host/chat.py
+index 424ab1c6..23cd71ae 100644
+--- a/opentpu/host/chat.py
++++ b/opentpu/host/chat.py
+@@ -47,6 +47,7 @@ from __future__ import annotations
+ 
+ import argparse
+ import json
++import os
+ import sys
+ import time
+ from dataclasses import dataclass
+@@ -932,6 +933,13 @@ def make_backend(name: str, spec, cap: int, dev: str, model: str | None = None,
+     """(backend, configuration) for Engine (lookup: room for the resident decode's tables;
+     the weight formats size the board model's DRAM where an int8 image would not fit)."""
+     if name == "isa":
++        # OTPU_TARGET names the card the simulator stands for: its configuration (the hardware's
++        # truth, opentpu.target.config), so that the ISA's tokens are that card's bit for bit.
++        # Without it the callers' default: the design's (two slices), or the card's where a
++        # model takes one slice.
++        if os.environ.get("OTPU_TARGET"):
++            from opentpu.target import config
++            return "isa", config()
+         return "isa", None
+     if name == "board":
+         from opentpu.host.board import (Board, BoardBackend, XdmaTransport,   # the PCIe driver
+@@ -950,6 +958,16 @@ def make_backend(name: str, spec, cap: int, dev: str, model: str | None = None,
+     raise SystemExit(f"unknown backend {name}")
+ 
+ 
++def describe_config(c) -> str:
++    """The configuration a chat runs in, one line for its log (the ISA's and the card's tokens
++    agree only in the same one: compare by the hash)."""
++    from opentpu.target import arch_hash
++    on = [f for f in ("PAIR", "DSTEP", "STREAM", "SEQ_WC") if getattr(c, f, False)]
++    return (f"S={c.S} D={c.D} MCOLS={c.MCOLS} LANES={c.LANES} ACT_BLOCKS={c.ACT_BLOCKS} "
++            f"ACT_ROWS={c.act_rows} {'+'.join(on) or 'no PAIR/DSTEP/STREAM'}, "
++            f"DRAM {c.DRAM_BYTES >> 20} MiB, hash {arch_hash(c):08x}")
++
++
+ def _maps_on_design(spec) -> bool:
+     """The model maps onto the design's configuration (two slices), the simulators' default; a
+     model that takes one slice (Gemma 4: one KV head) runs in the card's instead."""
+@@ -1161,6 +1179,7 @@ def main(argv=None):
+         raise SystemExit(f"otpu-chat: {e}") from None
+     weights = weights_label(eng.image, wformat)
+     print(f"weights: {weights}", flush=True)
++    print(f"config: {describe_config(eng.cfg)}", flush=True)
+     how, secs = IC.last                     # (the image cache: opentpu/imgcache.py)
+     how = {"hit": "read from the image cache", "miss": "built and cached"}.get(how, "built")
+     print(f"loaded in {time.perf_counter() - t0:.1f} s (the image {how} in {secs:.1f} s)",

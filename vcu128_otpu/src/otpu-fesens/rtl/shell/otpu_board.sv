@@ -64,7 +64,11 @@ module otpu_board #(
                                        // GATHER (otpu_coll_bar; CAPS2 bit0 = 0, docs/infra_hunt.md 5)
   parameter bit SEQ_WC     = 1'b0,    // EXPERIMENTAL: otpu_seq's wait entries (WAITC, docs/seq_vpu.md; CFG_UARCH bit24)
   parameter int PLATFORM    = 0,       // the target's platform id (CFG_PLATFORM; opentpu/target.py)
-  parameter logic [31:0] ARCH_HASH = 32'h0  // the target's arch_hash (CFG_HASH)
+  parameter logic [31:0] ARCH_HASH = 32'h0, // the target's arch_hash (CFG_HASH)
+  parameter int CH_LOG2     = 31       // log2 bytes a slice addresses on each of its two channels
+                                       // (CFG_DRAM; 31: 2 GiB each, 4 GiB a slice). A board whose
+                                       // channels are smaller reports their size, so that the host
+                                       // never places data past them (a smaller slice: DRAM_BYTES)
 ) (
   input  logic         clk,
   input  logic         clk_f,          // TMEM_PMP 1: 2 x clk, rising with it (the MMCM's); else unused
@@ -221,9 +225,9 @@ module otpu_board #(
               .HAS_I2C(HAS_I2C), .CHASH(CHASH), .DSTEP(DSTEP), .HOSTCAL(HOSTCAL),
               .COLL_GATHER(COLL_GATHER),
               .LDP(S > 1 ? 2 + 2 * XR : 2),  // LOAD to a slice's busy and back
-              // each slice on its two channels' 2 GiB each (otpu_native_dram): 4 GiB
+              // each slice on its two channels' 2^CH_LOG2 bytes each (otpu_native_dram)
               .S(S), .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS), .ACT_BLOCKS(ACT_BLOCKS),
-              .DRAM_LOG2(32), .NCH(2), .CH_LOG2(31), .MXU_IMPL(MXU_IMPL), .TMEM_IMPL(TMEM_IMPL),
+              .DRAM_LOG2(CH_LOG2 + 1), .NCH(2), .CH_LOG2(CH_LOG2), .MXU_IMPL(MXU_IMPL), .TMEM_IMPL(TMEM_IMPL),
               .VPU_CL(VPU_CL), .ULANES(ULANES), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM),
               .ARCH_HASH(ARCH_HASH)) u_ctrl (
     .clk, .rst,

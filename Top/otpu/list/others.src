@@ -25,6 +25,7 @@ vcu128_otpu/src/otpu-fesens/rtl/shell/otpu_mem_ch.sv
 vcu128_otpu/src/otpu-fesens/rtl/shell/otpu_axi_split2.sv
 vcu128_otpu/src/otpu-fesens/rtl/boards/bcu1525/otpu_bcu_sys.sv
 vcu128_otpu/src/hbm/otpu_hbm_port.sv
+vcu128_otpu/src/hbm/vcu128_hbm.sv
 vcu128_otpu/src/eth40/eth40_pkg.sv
 vcu128_otpu/src/eth40/eth40_arp_rx.sv
 vcu128_otpu/src/eth40/eth40_ctl_tx.sv
@@ -40,9 +41,17 @@ vcu128_otpu/src/eth40/otpu_eth_bridge.sv
 vcu128_otpu/src/lib/verilog-axi/rtl/axil_cdc_rd.v
 vcu128_otpu/src/lib/verilog-axi/rtl/axil_cdc.v
 vcu128_otpu/src/lib/verilog-axi/rtl/axil_cdc_wr.v
+vcu128_otpu/src/lib/verilog-axi/rtl/axi_register.v
+vcu128_otpu/src/lib/verilog-axi/rtl/axi_register_rd.v
+vcu128_otpu/src/lib/verilog-axi/rtl/axi_register_wr.v
+vcu128_otpu/src/vcu128_xreg.sv
 vcu128_otpu/src/lib/verilog-axis/rtl/axis_fifo.v
 vcu128_otpu/src/lib/verilog-axis/rtl/axis_register.v
 vcu128_otpu/src/vcu128_axil_xbar.sv
+vcu128_otpu/src/thermal/vcu128_sysmon_drp.sv
+vcu128_otpu/src/thermal/vcu128_sysmon.sv
+vcu128_otpu/src/thermal/vcu128_thermal.sv
+vcu128_otpu/src/thermal/vcu128_ctl_guard.sv
 vcu128_otpu/src/vcu128_platform_regs.sv
 vcu128_otpu/src/eth40_mgmt.sv
 vcu128_otpu/src/eth40_mac_init.sv

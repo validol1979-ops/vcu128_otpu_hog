@@ -1,0 +1,174 @@
+% Слайс openTPU (otpu_slice) на VCU128 — вариант TikZ схемы ../../slice_structure.dot.
+% Содержание то же (блоки, подписи, ширины); раскладка ручная, линии ортогональные.
+% Сборка: ./build.sh (lualatex + pdftoppm).
+\documentclass[tikz,border=6mm]{standalone}
+\usepackage{fontspec}
+\setmainfont{DejaVu Sans}   % есть → ↔ ≤ − (в Noto Sans их нет)
+\setsansfont{DejaVu Sans}
+\usetikzlibrary{positioning,fit,backgrounds,arrows.meta,calc,shapes.symbols}
+
+% цвета групп из slice_structure.dot
+\definecolor{edge}{HTML}{396484}
+\definecolor{nodefill}{HTML}{EEF3F8}
+\definecolor{ctlfill}{HTML}{E6F4EA}
+\definecolor{memfill}{HTML}{FFE3D6}
+\definecolor{seqc}{HTML}{8A63C6}\definecolor{seqfill}{HTML}{F0E6FF}
+\definecolor{mxuc}{HTML}{D77B12}\definecolor{mxufill}{HTML}{FFF0E0}
+\definecolor{actfill}{HTML}{FFF4D6}
+\definecolor{qc}{HTML}{2B8A3E}\definecolor{qfill}{HTML}{E9F7EC}
+\definecolor{tmc}{HTML}{1971C2}\definecolor{tmfill}{HTML}{DFF0FF}\definecolor{vfill}{HTML}{E7F0FF}
+\definecolor{gr}{HTML}{555555}\definecolor{collc}{HTML}{7A7A7A}
+\definecolor{slicefill}{HTML}{FBFCFE}
+
+\tikzset{
+  blk/.style={draw=edge, rounded corners=3pt, fill=nodefill, align=center,
+              font=\footnotesize, inner sep=4pt, minimum height=9mm},
+  port/.style={blk, signal, signal to=east, signal pointer angle=120, rounded corners=0pt,
+               fill=memfill},
+  grp/.style={draw=#1, rounded corners=6pt, inner sep=5mm},
+  lbl/.style={font=\scriptsize, fill=white, fill opacity=.9, text opacity=1, inner sep=1.5pt},
+  glabel/.style={font=\small\bfseries, anchor=north west, inner sep=2mm},
+  % white halo under every line: crossings stay readable
+  w/.style={preaction={draw=white, line width=3.2pt, -}},
+  data/.style={w, draw=edge, -{Stealth[length=2.4mm]}, line width=.7pt},
+  bi/.style={data, {Stealth[length=2.4mm]}-{Stealth[length=2.4mm]}},
+  ctl/.style={w, draw=edge, dashed, -{Stealth[length=2.2mm]}, line width=.6pt},
+  issue/.style={ctl, draw=seqc},
+  heavy/.style={line width=1.6pt},
+}
+
+\pgfdeclarelayer{slicebg}
+\pgfsetlayers{slicebg,background,main}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm]
+
+% ---------------------------------------------------------------- узлы
+\node[blk, fill=ctlfill] (ctrl) at (13, 2.6)
+  {\textbf{otpu\_ctrl} (s\_ctl 0x00000)\\CTRL: RUN / LOAD / CLEAR · ARG0..7\\STATUS · счётчики · буфер трассы};
+
+% SEQ
+\node[blk, fill=seqfill, text width=6.2cm] (loader) at (13,-0.6)
+  {загрузчик программы\\HBM → IMEM, 1 чанк = 4 инстр./такт\\(старт и HALT CHAIN)};
+\node[blk, fill=seqfill, text width=6.2cm] (imem) at (13,-2.6)
+  {IMEM 4096 инструкций × 256 бит\\чтение на такт вперёд};
+\node[blk, fill=seqfill, text width=6.2cm] (dec) at (13,-4.5)
+  {выборка + декод: 1 инстр./такт\\R0..R15, LI / ADDI / LOOP (до 4 уровней)\\w1..w3 += R[ra..rc]};
+\node[blk, fill=seqfill, text width=6.2cm] (win) at (13,-6.8)
+  {окно WIN = 16 + табло\\отпечатки диапазонов TMEM / HBM / ACT\\RAW / WAR / WAW → старт самой старой готовой};
+
+% слева: QUANT, ACT RAM
+\node[blk, fill=qfill, text width=5.6cm] (quant) at (0.2,-9.6)
+  {\textbf{QUANT} — otpu\_quant\\8 FP32/такт, 2 прохода (max → коды)\\буфер строки 1024 чанка · CSCALE / RSCALE};
+\node[blk, fill=actfill, text width=5.6cm] (act) at (0.2,-13.4)
+  {\textbf{ACT RAM} — otpu\_actram\\4 строки × 128 блоков × 128 B INT8\\+ \{da, Sa\} на (строку, блок)};
+
+% порты памяти
+\node[port, text width=3.4cm] (portsw) at (7.6,-9.6)
+  {\textbf{порт SW}\\32 бит/такт + маска байт\\QST (KV)};
+\node[port, text width=2.4cm] (porta) at (8.6,-13.0)
+  {\textbf{порт A}\\строки 32 B\\масштабы MXU};
+\node[port, text width=3.6cm] (portb) at (14.0,-13.0)
+  {\textbf{порт B}\\128 B/такт (1024 бит)\\DMA, затем поток MXU, загрузчик};
+
+% MXU
+\node[blk, fill=mxufill, text width=4.6cm] (iss) at (5.6,-17.2)
+  {issuer (ustart)\\запросы N×KB чанков + строк масштабов};
+\node[blk, fill=mxufill, text width=2.6cm] (sfifo) at (8.6,-18.6)
+  {FIFO масштабов\\Sw, dw по блокам};
+\node[blk, fill=mxufill, text width=2.6cm] (cfifo) at (12.6,-18.6)
+  {FIFO чанков\\1024 × 128 B};
+\node[blk, fill=mxufill, text width=6.4cm] (arr) at (4.6,-21.6)
+  {систолический массив (urel)\\4 колонки × 128 INT8·INT8\\цепочки DSP48E2 по 16 · точная целая сумма};
+\node[blk, fill=mxufill, text width=6.4cm] (epi) at (7.4,-25.0)
+  {FIFO результатов → эпилог, 2 полосы\\i2f · ×Sw · ×Sa·2\textsuperscript{−16} · ACC / ASCALE / RMAX};
+
+% справа: DMA, VPU
+\node[blk, text width=5.8cm] (dma) at (19.4,-16.6)
+  {\textbf{DMA} — otpu\_dma\\LD / ST: чанк 128 B ↔ 8 слов FP32/такт\\буфер LD 128 чанков · WAITW · DSTEP/STREAM};
+\node[blk, fill=vfill, text width=5.8cm] (vpu) at (19.4,-22.4)
+  {\textbf{VPU} — otpu\_vpu\\8 полос FP32 (простые) + составные\\(exp2, recip, rsqrt, log2) · дерево редукции\\SE: хвост stream engine (DeltaNet)};
+
+% TMEM
+\node[blk, fill=tmfill, text width=8.4cm] (arb) at (9.6,-29.0)
+  {арбитр банков (каждый такт, всё-или-ничего)\\приоритет: DMA > COLL > VPU > MXU drain > QUANT};
+\node[blk, fill=tmfill, text width=8.4cm] (tm) at (9.6,-31.6)
+  {65536 × FP32 = 256 KiB, 8 банков (адрес mod 8)\\на FPGA — копия на каждый порт чтения\\8 портов чтения: MXU, DMA, Q, VA, VB, Q2, Q3, COLL\\4 порта записи: DMA, MXU, COLL, VPU};
+
+% вне слайса
+\node[blk, fill=ctlfill, text width=5.2cm] (coll) at (28.4,-6.8)
+  {\textbf{otpu\_coll} (общий на S слайсов)\\BAR · GATHER: сегменты слайсов →\\TMEM всех слайсов};
+\node[blk, fill=memfill, text width=6.4cm] (dram) at (28.4,-11.0)
+  {\textbf{память слайса}: otpu\_native\_dram\\2 канала (beat 64 B, чередование + CHASH)\\→ otpu\_mem\_ch ×2 → otpu\_hbm\_port ×2 → HBM};
+
+% ---------------------------------------------------------------- группы
+\begin{scope}[on background layer]
+  \node[grp=seqc, fit=(loader)(win), inner xsep=4mm, inner ysep=5mm, yshift=3mm] (gseq) {};
+  \node[glabel, text=seqc] at (gseq.north west) {SEQ — otpu\_seq};
+  \node[grp=mxuc, fit=(iss)(sfifo)(cfifo)(arr)(epi), inner sep=5mm, yshift=3mm] (gmxu) {};
+  \node[glabel, text=mxuc, align=left] at (gmxu.north west) {MXU — otpu\_mxu\\[-1pt](2 команды в работе)};
+  \node[grp=tmc, fit=(arb)(tm), inner sep=5mm, yshift=3mm] (gtm) {};
+  \node[glabel, text=tmc, anchor=north east] at (gtm.north east) {TMEM — otpu\_tmem};
+\end{scope}
+\coordinate (sliceLL) at (-3.4,-33.0);  % обратная линия QUANT внутри рамки
+\begin{pgfonlayer}{slicebg}
+  \node[grp=edge, fill=slicefill, fit=(gseq)(quant)(act)(gmxu)(dma)(vpu)(gtm)(portsw)
+        (sliceLL), inner xsep=6mm, inner ysep=6mm, yshift=3mm] (gslice) {};
+  \node[glabel, text=edge] at (gslice.north west) {otpu\_slice};
+\end{pgfonlayer}
+
+% ---------------------------------------------------------------- управление
+\draw[ctl] ([xshift=12mm]ctrl.south) -- ([xshift=12mm]loader.north);
+\node[lbl, anchor=east] at (14.1,1.35) {LOAD: PROG\_ADDR, PROG\_N};
+\draw[ctl] (ctrl.east) -| (17.0,-4.5) -- (dec.east);
+\node[lbl, anchor=west, align=left] at (17.1,-2.2) {RUN · ARG0..7\\→ R8..R15};
+\draw[ctl] ([yshift=2mm]win.east) -| (19.8,3.8) -| ([xshift=18mm]ctrl.north);
+\node[lbl, anchor=west, align=left] at (19.9,-1.0) {HALTED / ERROR\\/ icount};
+\draw[data] (loader) -- (imem);
+\draw[data] (imem) -- (dec);
+\draw[data] (dec) -- (win);
+
+% раздача инструкций (окно → блоки)
+\draw[issue] (win.west) -| (quant.north);
+\draw[issue] ([yshift=-2mm]win.east) -- node[lbl, pos=.62]{BAR / GATHER} ([yshift=-2mm]coll.west);
+\draw[issue] ([xshift=-25mm]win.south) |- (5.6,-14.2) -- (iss.north);
+\draw[issue] ([xshift=25mm]win.south) |- (20.9,-8.9) -- ([xshift=15mm]dma.north);
+\draw[issue] ([xshift=12mm]win.south) |- (23.3,-9.4) |- (vpu.east);
+\draw[issue] (11.0,0 |- win.south) -- (11.0,-20.3) -- node[lbl, above, pos=.4]{urel} (7.2,-20.3) -- (7.2,0 |- arr.north);
+
+% ---------------------------------------------------------------- порты памяти
+\draw[bi] ([yshift=-3mm]dram.west) -| node[lbl, pos=.3, below]{чтение / запись чанков} ([xshift=6mm]portb.north);
+\draw[data] ([yshift=3mm]dram.west) -| node[lbl, pos=.12, above]{чтение} (porta.north);
+\draw[data] (portsw.east) -| node[lbl, pos=.2, above]{запись слов} ([xshift=-14mm]dram.north);
+\draw[data] ([xshift=-14mm]portb.north) |- (9.3,-8.3) |- (loader.west);
+\node[lbl, rotate=90, anchor=south] at (9.3,-4.2) {программа};
+\draw[bi] (portb.east) -| node[lbl, pos=.3, above]{LD / ST} ([xshift=-15mm]dma.north);
+\draw[data, draw=mxuc, heavy] (12.6,0 |- portb.south) -- node[lbl, pos=.9, right]{веса, K-строки, V\textsuperscript{T}} (cfifo.north);
+\draw[data, draw=mxuc] (8.4,0 |- porta.south) -- (8.4,0 |- sfifo.north);
+\draw[ctl] ([yshift=2.5mm]iss.east) -| node[lbl, pos=.25, above]{запросы} (14.0,0 |- portb.south);
+\draw[ctl] ([yshift=-2.5mm]iss.east) -| (9.2,0 |- porta.south);
+
+% ---------------------------------------------------------------- MXU
+\draw[data, draw=mxuc, heavy] (cfifo.south) |- node[lbl, pos=.25, right]{1 чанк/такт} ([yshift=-3mm]arr.east);
+\draw[data, draw=mxuc] (sfifo.south) -- ([xshift=12mm]epi.north);
+\draw[data, draw=mxuc, heavy] (act.south) |- node[lbl, pos=.3, right]{4 строки × блок + Sa} (arr.west);
+\draw[data, draw=mxuc] ([xshift=-6mm]arr.south) -- ([xshift=-34mm]epi.north);
+\draw[data, draw=mxuc, heavy] ([xshift=-14mm]epi.south) -- node[lbl, left]{≤ 2 FP32/такт} ([xshift=-36mm]arb.north);
+\draw[data, draw=mxuc, dotted] ([xshift=-12mm]arb.north) -- node[lbl, right]{ACC/ASCALE: старое значение} ([xshift=10mm]epi.south);
+
+% ---------------------------------------------------------------- блоки ↔ TMEM
+\draw[bi, draw=gr] (dma.west) -| (15.2,-28.75) node[lbl, pos=.6, right]{8 слов/такт} -- (15.2,-28.75 -| arb.east);
+\draw[data, draw=qc] (arb.west) -| (-3.2,-20.0) node[lbl, pos=.75, right, align=left]{8 FP32/такт\\(Q, Q2, Q3)} |- (quant.west);
+\draw[data, draw=qc, heavy] ([xshift=-10mm]quant.south) -- node[lbl, right]{QACT: 8 B/такт + \{da, Sa\}} ([xshift=-10mm]act.north);
+\draw[data, draw=qc, heavy] ([yshift=3mm]quant.east) -- node[lbl, above]{QST} ([yshift=3mm]portsw.west);
+\draw[bi, draw=tmc] (vpu.south) |- node[lbl, pos=.3, right]{VA, VB → запись: 8 слов/такт} ([yshift=-2.5mm]arb.east);
+\draw[data, dotted] (dma.south) -- node[lbl, right]{DSTEP / STREAM (минуя TMEM)} (vpu.north);
+\draw[bi, draw=collc] (coll.east) -| (32.2,-30.4) node[lbl, pos=.75, left]{GATHER; RLD → R[rd]} -| ([xshift=-8mm]arb.south east);
+\draw[bi, line width=1.2pt] (arb) -- (tm);
+
+% ---------------------------------------------------------------- заголовок
+\node[font=\large\bfseries, anchor=south] at (13,5.2)
+  {Слайс openTPU (otpu\_slice) на VCU128: S=1, D=128, MCOLS=4, LANES=8, WIN=16, core\_clk 100 МГц};
+\node[font=\small, anchor=south] at (13,4.6)
+  {сплошные — данные (ширина / такт), пунктир — управление, фиолетовый пунктир — раздача инструкций из окна};
+\end{tikzpicture}
+\end{document}

@@ -15,7 +15,7 @@ export PYTHONDONTWRITEBYTECODE=1 PYTHONWARNINGS=ignore::DeprecationWarning
 cd "$here"
 mkdir -p out
 status=0
-for nc in ${@:-2 4}; do
+for nc in ${@:-2 4 8}; do
     mkdir -p out/nc$nc
     "$venv/bin/python" run.py "$nc" 2>&1 | tee out/nc$nc/sim.log || status=1
     grep -q "^NC=$nc: [0-9]* tests, 0 failed (0 skipped)" out/nc$nc/sim.log || status=1

@@ -19,6 +19,6 @@ for j=1:p.generate
 end
 r.consumed=consumed; r.state=state; r.weight_bytes=model.weight_bytes;
 r.kv_capacity_bytes=model.kv_capacity_bytes;
-r.kv_used_bytes=state.pos*p.layers*2*p.kv_heads*(p.hidden/p.heads)*p.kv_bytes;
+kvb=otpu.kv_bytes(p,c,state.pos); r.kv_used_bytes=kvb.used(state.pos);
 r.config=p; r.hardware=c;
 end

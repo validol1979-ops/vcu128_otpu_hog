@@ -1,0 +1,35 @@
+// Level 4: one MM command in the MXU (otpu_mxu: issuer, FIFOs, systolic array, drain).
+digraph mm {
+  graph [fontname="Helvetica", fontsize=12, labelloc=t, nodesep=0.4, ranksep=0.45,
+         label="Уровень 4. Команда MM в MXU: две фазы (ustart / urel), поток из HBM, эпилог"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9, color="#396484"];
+  start [shape=circle, label="", width=0.25, style=filled, fillcolor="#17324d"];
+  done [shape=doublecircle, label="", width=0.2, style=filled, fillcolor="#17324d"];
+  queued [label="QUEUED\nв окне SEQ; ждёт снятия\nзависимостей по HBM"];
+  stream [label="STREAM (ustart)\nissuer: N строк × KB чанков 128 B\nпорт B → FIFO (1024)\nстроки масштабов порт A → FIFO Sw/dw", fillcolor="#ffe3d6"];
+  yield [label="YIELD_PORTS\nпорты отданы DMA / QST\n(у них приоритет)", fillcolor="#ffe3e3"];
+  fifofull [label="FIFO_FULL\nissuer ждёт места"];
+  release [label="WAIT_RELEASE\nждать urel: готов операнд\nв ACT RAM (QACT)", fillcolor="#fff4d6"];
+  rowwait [label="ROW_WAIT\nвся строка (KB чанков +\nмасштабы) уже в FIFO?"];
+  compute [label="COMPUTE\nKB продвижений: чанк × ACT[блок]\nв 4 колонках (M ≤ 4 строк)\nточная целая сумма со сдвигами 2^−(dw+da)", fillcolor="#e6f4ea"];
+  epi [label="EPILOGUE\ni2f → ×Sw[n] → ×Sa[j]·2^−16\n(+T[out] ACC, ·α ASCALE, RMAX)"];
+  drain [label="DRAIN\n≤ 2 FP32/такт → TMEM\nпо гранту банков"];
+  deny [label="TMEM_DENY\nбанк занят DMA/VPU\n(приоритет выше)", fillcolor="#ffe3e3"];
+
+  start -> queued;
+  queued -> stream [label="зависимости по HBM сняты\n(MXU держит 2 команды)"];
+  stream -> yield [label="DMA/QST просят порт"];
+  yield -> stream;
+  stream -> fifofull;
+  fifofull -> stream;
+  stream -> release [label="префетч идёт параллельно\nс RMSNorm / QACT"];
+  release -> rowwait [label="urel"];
+  rowwait -> compute [label="да"];
+  rowwait -> rowwait [label="нет (MXU starved)"];
+  compute -> epi -> drain;
+  drain -> deny;
+  deny -> drain;
+  drain -> rowwait [label="следующая строка n+1"];
+  drain -> done [label="N строк записаны\n→ udone"];
+}

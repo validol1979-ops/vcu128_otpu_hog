@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 11:33:58 +0300
+Subject: [PATCH 6/8] offload: BackendDram writes every slice (host row
+ mailboxes at S > 1)
+
+BackendDram wrote slice 0 only, so the row servers (Gemma 4's PLE rows, Qwen's embed_host) fed one
+slice while every slice runs the same program and reads its own DRAM. Without an explicit slice it now
+broadcasts writes to all cfg.S slices (reads stay on slice 0); an explicit s keeps the old behaviour.
+IsaBackend exposes cfg. tests/test_offload_server.py: PLE / Qwen mailbox with fake and ISA backends at
+S = 1 / 2. tests/test_offload*.py: 117 passed, 1 failed (test_pool_file_counts_its_reads_by_the_page_cache,
+fails on the unpatched tree too: page-cache environment). Codex gpt-6.1-sol (medium), reviewed.
+
+diff --git a/opentpu/host/offload.py b/opentpu/host/offload.py
+index a68f2202..fbfffd4f 100644
+--- a/opentpu/host/offload.py
++++ b/opentpu/host/offload.py
+@@ -1689,14 +1689,20 @@ class SimDram:
+ 
+ class BackendDram:
+     """A backend's DRAM (write(s, addr, array) / read(s, addr, n): IsaBackend, RtlBackend,
+-    BoardBackend) as ExpertServer's memory; one slice (the board's)."""
++    BoardBackend) as server memory. By default writes broadcast to every slice and reads
++    use slice 0: all slices run the same row requests and need the rows and served word in
++    their own DRAM. An explicit s selects one slice for both reads and writes."""
+ 
+-    def __init__(self, backend, s: int = 0):
+-        self.backend, self.s = backend, s
++    def __init__(self, backend, s: int | None = None):
++        self.backend, self.s = backend, 0 if s is None else s
++        self.slices = (range(getattr(getattr(backend, "cfg", None), "S", 1))
++                       if s is None else (s,))
+ 
+     def write(self, addr: int, data) -> None:
+         b = data if isinstance(data, np.ndarray) else np.frombuffer(bytes(data), np.uint8)
+-        self.backend.write(self.s, addr, np.ascontiguousarray(b).view(np.uint8).reshape(-1))
++        b = np.ascontiguousarray(b).view(np.uint8).reshape(-1)
++        for s in self.slices:
++            self.backend.write(s, addr, b)
+ 
+     def read(self, addr: int, n: int) -> bytes:
+         return np.asarray(self.backend.read(self.s, addr, n)).view(np.uint8).tobytes()
+diff --git a/opentpu/llm/qwen3.py b/opentpu/llm/qwen3.py
+index 58b1a952..9a736956 100644
+--- a/opentpu/llm/qwen3.py
++++ b/opentpu/llm/qwen3.py
+@@ -1881,6 +1881,7 @@ class IsaBackend:
+     place instead of copied, so a 4 GiB image is held once; the caller gives them up."""
+ 
+     def __init__(self, cfg: Config, images: list, adopt: bool = False):
++        self.cfg = cfg
+         own = adopt and all(isinstance(m, np.ndarray) and m.dtype == np.uint8 and m.ndim == 1
+                             and m.flags.owndata and len(m) <= cfg.DRAM_BYTES for m in images)
+         self.machine = Machine(cfg, [[] for _ in range(cfg.S)],
+diff --git a/tests/test_offload_server.py b/tests/test_offload_server.py
+index bddb45b9..dc17d051 100644
+--- a/tests/test_offload_server.py
++++ b/tests/test_offload_server.py
+@@ -35,6 +35,86 @@ def _served(mem, lay):
+     return float(np.frombuffer(mem.read(lay.served, 4), np.float32)[0])
+ 
+ 
++@pytest.mark.parametrize("slices", [1, 2])
++@pytest.mark.parametrize("backend_kind", ["fake", "isa"])
++@pytest.mark.parametrize("source", ["ple", "embed_host"])
++@pytest.mark.parametrize("count", [0, 2], ids=["one-row", "two-rows"])
++def test_host_row_mailbox_broadcasts(slices, backend_kind, source, count, monkeypatch):
++    """Both row-server factories fill every slice's slot before releasing any WAITW."""
++    from types import SimpleNamespace
++    import opentpu.host.offload as O
++    from opentpu.llm.gemma4 import Image
++    from opentpu.llm.qwen3 import EmbedHost, Engine, IsaBackend
++    from opentpu.isasim import board_config
++
++    lay = O.RowLayout(256, 1024, 64)
++    drams = [SimDram(np.full(4096, 0xA5, np.uint8)) for _ in range(slices)]
++    writes = []
++
++    backend = SimpleNamespace(cfg=SimpleNamespace(S=slices),
++                              write=lambda s, a, d: drams[s].write(a, d),
++                              read=lambda s, a, n: drams[s].dram[a:a + n].copy())
++    if backend_kind == "isa":
++        backend = IsaBackend(board_config(S=slices, DRAM_BYTES=4096),
++                             [mem.dram for mem in drams])
++        drams = [SimDram(s.dram) for s in backend.machine.slices]
++    backend_write = backend.write
++
++    def write(s, addr, data):
++        writes.append((s, addr))
++        backend_write(s, addr, data)
++
++    backend.write = write
++    store = np.arange(8 * lay.row_bytes, dtype=np.uint8).reshape(8, lay.row_bytes)
++    if source == "ple":
++        image = SimpleNamespace(ple_host=True, io={"ple_mbox": lay.mbox}, ple=lay.slot,
++                                ple_rec=lay.row_bytes, ple_store=store, rows=2)
++        srv = Image.row_server(image, backend)
++        host_rows = lambda ts: Image.host_rows(image, ts)
++    else:
++        image = EmbedHost()
++        image.lookup = dict(host=True, mbox=lay.mbox, embed_q=(lay.slot,),
++                            rec=lay.row_bytes, store=store, rows=2)
++        srv = image.row_server(backend)
++        host_rows = image.host_rows
++    srv.load()
++    for mem in drams:
++        assert mem.read(lay.mbox, lay.WORDS) == bytes(lay.WORDS)
++
++    # Engine's pre-run path already broadcasts; cover it with the same host table.
++    engine = SimpleNamespace(row_server=srv, _host_rows=host_rows,
++                             cfg=backend.cfg, backend=backend)
++    Engine._write_host_rows(engine, [1, 2])
++    for mem in drams:
++        assert mem.read(lay.slot, 2 * lay.row_bytes) == store[[1, 2]].tobytes()
++
++    # Each slice posts the same request, as the replicated device programs do.
++    ids = [3, 5][:max(1, count)]
++    for mem in drams:
++        mem.write(lay.row, np.array(ids, np.float32))
++        mem.write(lay.mbox, np.array([1, count], np.float32))
++    writes.clear()
++    assert srv.poll() == 1 and srv.poll() == 0
++    for mem in drams:
++        assert mem.read(lay.slot, len(ids) * lay.row_bytes) == store[ids].tobytes()
++        assert mem.read(lay.mbox + 4, 4) == bytes(4)
++        assert _served(mem, lay) == 1.0
++    first_served = next(i for i, (_, a) in enumerate(writes) if a == lay.served)
++    assert all((s, lay.slot + i * lay.row_bytes) in writes[:first_served]
++               for s in range(slices) for i in range(len(ids)))
++
++    monkeypatch.setattr(O, "SEQ_REBASE", 1)
++    assert srv.rebase()
++    for mem in drams:
++        assert mem.read(lay.mbox, 8) == bytes(8) and _served(mem, lay) == 0.0
++
++    # Callers may still explicitly select a single slice.
++    O.BackendDram(backend, slices - 1).write(lay.slot, b"only")
++    assert O.BackendDram(backend, slices - 1).read(lay.slot, 4) == b"only"
++    if slices > 1:
++        assert drams[0].read(lay.slot, 4) == store[ids[0], :4].tobytes()
++
++
+ def test_layout_is_aligned_and_disjoint():
+     lay = Layout.build(4096, E, K, (3, 5), SLOT)
+     words = [lay.mbox, lay.served, lay.answer, lay.dir] + [a for a, _ in lay.slots]

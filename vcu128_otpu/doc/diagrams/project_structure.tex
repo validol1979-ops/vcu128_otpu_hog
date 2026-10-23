@@ -34,7 +34,7 @@
 {\small #3}\par\vspace{2mm}}
 \newcommand{\foot}[1]{\par\vspace{1mm}{\fontsize{7.3}{9}\selectfont\textcolor{ink!75}{#1}}}
 \begin{document}
-\heading{LLM + HBM: логическая структура}{1}{Авторегрессионный декодер MATLAB: LLaMA-подобная схема, INT8-проекции и FP32 KV-cache. Ethernet отсутствует.}
+\heading{LLM + HBM: логическая структура}{1}{Авторегрессионный декодер MATLAB: LLaMA-подобная схема, INT8-проекции, KV-cache INT8 + FP32-масштаб на токен (как QST). Ethernet отсутствует.}
 \begin{center}
 \begin{tikzpicture}[x=1cm,y=1cm]
 \path[use as bounding box] (0,0) rectangle (26.7,14.4);
@@ -74,7 +74,7 @@
 \draw[flow] (weights.north) -- (4,3.3) -- node[small,above]{Веса Gate/Up} (6.2,3.3) -- (gu.south);
 \draw[flow] (cache.north) -- (13.3,7.6) -- node[small,below]{K/V префикса} (attn.south);
 \node[note,text width=8cm,anchor=west] at (.2,.1) {Синие стрелки: данные и порядок вычислений.\\Общий декодер; архитектура LFM/Qwen отличается.};
-\node[note,text width=11.5cm,anchor=west] at (11,.1) {Размер cache: $2LTH_{KV}d\cdot4$ байт (FP32).\\$T$ — контекст; $H_{KV}$ — KV heads; $d$ — размерность head.};
+\node[note,text width=11.5cm,anchor=west] at (11,.1) {Размер cache: $LTH_{KV}(\lceil d/D\rceil D+d+8)$ байт (INT8 + масштабы).\\$T$ — контекст; $H_{KV}$ — KV heads; $d$ — размерность head.};
 \end{tikzpicture}
 \end{center}
 \foot{Основа: sim/matlab/+otpu/llm\_step.m, llm\_init.m, llm\_event.m. Веса примера случайные; VPU-функции математические, время HBM оценочное.}

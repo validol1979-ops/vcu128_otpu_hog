@@ -90,6 +90,7 @@ module eth40_rd
     logic [31:0] r_off, r_rem, r_flen, fsz;
     logic [27:0] r_beats;               // beat AXIS данных кадра осталось
     logic [17:0] sbase;
+    logic [19:0] ssum;                  // sbase + адрес назначения (такт R_PREP)
     logic [15:0] csum;
     logic [511:0] hdr;
     logic [127:0] lo;
@@ -132,10 +133,11 @@ module eth40_rd
             end
             R_PREP: begin
                 r_flen <= r_rem < fsz ? r_rem : fsz;
+                ssum   <= 20'(sbase) + q2.src.ip[31:16] + q2.src.ip[15:0];
                 rs     <= R_HDR;
             end
             R_HDR: begin
-                csum <= ip_csum(sbase, 16'(20 + 8 + PHDR) + r_flen[15:0], q2.src.ip);
+                csum <= ip_csum_fin(ssum + 16'(16'(20 + 8 + PHDR) + r_flen[15:0]));
                 rs   <= R_MK;
             end
             R_MK: begin

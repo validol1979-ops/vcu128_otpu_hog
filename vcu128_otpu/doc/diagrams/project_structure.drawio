@@ -1,0 +1,297 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="01 Platform" id="01">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" page="1" pageWidth="1600" pageHeight="1200">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="01 Platform — VCU128 openTPU | target/vcu128.toml" style="text;fontSize=24;align=left;" vertex="1" parent="1">
+          <mxGeometry x="35" y="20" width="1500" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="host" value="ПК&#10;Tokenizer / compiler / Board API&#10;EthTransport" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff1d6;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="mac" value="QSFP1 / GTY quad 135&#10;40G MAC + PCS&#10;AXIS 256 bit" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#dceeff;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="bridge" value="otpu_eth_bridge&#10;UDP / SEQ / retry cache&#10;AXI4 DMA + AXI-Lite" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#dceeff;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ereg" value="eth40_regs&#10;0x50000&#10;Link / RX / TX counters" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="cdc" value="axil_cdc&#10;eth_clk → core_clk" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="jtag" value="jtag_axi_0&#10;Debug master" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="xbar" value="vcu128_axil_xbar&#10;2 masters / 3 windows" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="regs" value="Platform / MAC init&#10;0x40000 / 0x60000" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="board" value="otpu_bcu_sys / otpu_board&#10;otpu_ctrl + trace + otpu_top&#10;S=1 slice, core=100 MHz" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="memch" value="otpu_mem_ch ×2&#10;Core / host arbitration, RMW&#10;CDC core / xclk / uclk" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="port" value="otpu_hbm_port ×2&#10;RAW / WAR / WAW, RD / WD&#10;64-byte beats → AXI3" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="hbm" value="hbm_0 / HBM2&#10;4 active AXI3 ports, 256 bit&#10;8 GiB physical / 4 GiB mapped" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="clock" value="Clock / reset&#10;QDR4 100 → core100, uclk225 MHz&#10;DDR4 100 → HBM reference" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="860" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="edge0" value="40G DAC, UDP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="host" target="mac">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge1" value="AXIS RX / TX" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="mac" target="bridge">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge2" value="AXI-Lite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="bridge" target="ereg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge3" value="AXI-Lite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="bridge" target="cdc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge4" value="core_clk" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="cdc" target="xbar">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge5" value="AXI-Lite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="jtag" target="xbar">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge6" value="control / status" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="xbar" target="regs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge7" value="0x00000, load / run" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="xbar" target="board">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge8" value="AXI4 DMA 128 bit / channel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="bridge" target="memch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge9" value="native reads / writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="board" target="memch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge10" value="2 native ports / channel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="memch" target="port">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge11" value="AXI3 256 bit, 225 MHz" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="port" target="hbm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge12" value="clock / reset" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="clock" target="board">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="02 Compute slice" id="02">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" page="1" pageWidth="1600" pageHeight="1200">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="02 Compute slice — VCU128 openTPU | target/vcu128.toml" style="text;fontSize=24;align=left;" vertex="1" parent="1">
+          <mxGeometry x="35" y="20" width="1500" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="imem" value="IMEM&#10;32768 instructions&#10;Loader from DRAM" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="seq" value="otpu_seq&#10;Dispatch WIN=16 / scoreboard&#10;BAR, HALT, dependencies" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="coll" value="Collective / register reads&#10;otpu_coll / RLD&#10;S=1: no inter-slice reduction" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="dma" value="otpu_dma&#10;LD / ST / DSTEP / STREAM&#10;Tensor transfers / stream tail" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="quant" value="otpu_quant&#10;QACT: FP32 → ACT&#10;QST: FP32 → DRAM INT8 / scales" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="mxu" value="otpu_mxu&#10;D=128, MCOLS=4&#10;INT8 / 4-bit systolic dot products" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="vpu" value="otpu_vpu&#10;8 FP32 lanes, VPU_CL=2&#10;Reductions / EXP / RECIP / RSQRT" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="tmem" value="otpu_tmem&#10;65536 FP32 words, 8 banks&#10;Per-unit read copies, TMEM_IMPL=0" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="act" value="otpu_actram&#10;4 rows ×128 blocks ×128 INT8&#10;Sa + group offsets per block" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="fifo" value="MXU stream + scale FIFOs&#10;FIFO_DEPTH=1024 in target&#10;Integer accumulator / FP32 epilogue" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="arb" value="Slice arbitration&#10;TMEM all-or-nothing grants&#10;DRAM B: DMA &gt; MXU" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="dram" value="otpu_native_dram → mem_ch → HBM&#10;A: scale lines, B: chunks / DMA&#10;SW: QST scalar writes" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="860" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="edge0" value="instructions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="imem" target="seq">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge1" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="seq" target="dma">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge2" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="seq" target="quant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge3" value="start / go" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="seq" target="mxu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge4" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="seq" target="vpu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge5" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="seq" target="coll">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge6" value="LD / ST FP32" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="dma" target="tmem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge7" value="FP32 input" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="tmem" target="quant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge8" value="INT8 codes / scale" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="quant" target="act">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge9" value="stationary activations" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="act" target="mxu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge10" value="weights / scales" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="dram" target="fifo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge11" value="prefetch / replay" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="fifo" target="mxu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge12" value="FP32 results" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="mxu" target="tmem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge13" value="FP32 reads / writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="vpu" target="tmem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge14" value="read / write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="coll" target="tmem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge15" value="bulk data" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="dma" target="dram">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge16" value="QST" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="quant" target="dram">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge17" value="bank grants" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="arb" target="tmem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge18" value="port grants" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="arb" target="dram">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="03 LLM numerical model" id="03">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" page="1" pageWidth="1600" pageHeight="1200">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="03 LLM numerical model — VCU128 openTPU | target/vcu128.toml" style="text;fontSize=24;align=left;" vertex="1" parent="1">
+          <mxGeometry x="35" y="20" width="1500" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="token" value="Token ID&#10;Prompt then greedy decode&#10;Random deterministic weights" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff1d6;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="embed" value="Embedding&#10;FP32 row from HBM" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="norm1" value="Attention RMSNorm&#10;Mathematical VPU approximation" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="qkv" value="Q / K / V projections&#10;QACT → INT8 MM → FP32" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="110" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="rope" value="RoPE&#10;Q and K, current position" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="cache" value="KV-cache INT8 + FP32 scale in HBM&#10;QST: TMEM → QUANT → HBM&#10;K rows, Vᵀ tiles, prefix 1..T" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#def2e9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="attn" value="GQA causal attention&#10;MXU: q·Kᵀ (K streamed from HBM)&#10;VPU: softmax · MXU: P·Vᵀ" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="out" value="O projection + residual&#10;QACT → INT8 MM → add input" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="360" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="norm2" value="FFN RMSNorm" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="35" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="gate" value="Gate / Up projections&#10;QACT → INT8 MM" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="swiglu" value="SwiGLU&#10;SiLU(gate) × up" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="805" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="down" value="Down projection + residual&#10;INT8 MM → add input&#10;Repeat next layer" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="610" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="final" value="Final RMSNorm + LM head&#10;Logits → argmax → next ID" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#e3edf9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="860" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="timing" value="llm_event / HBM estimate&#10;64-byte rounded tensor traffic&#10;duration=max(memory, compute)" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#fff0d9;strokeColor=#3d6a8b;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="420" y="860" width="305" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="edge0" value="token ID" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="token" target="embed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge1" value="hidden vector" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="embed" target="norm1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge2" value="normalized FP32" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="norm1" target="qkv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge3" value="Q,K; V bypass" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="qkv" target="rope">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge4" value="K,V current" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="rope" target="cache">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge5" value="KV prefix; Q from RoPE" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="cache" target="attn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge6" value="attention result" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="attn" target="out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge7" value="residual result" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="out" target="norm2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge8" value="normalized FP32" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="norm2" target="gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge9" value="gate,up" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="gate" target="swiglu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge10" value="gated hidden" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="swiglu" target="down">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge11" value="next layer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="down" target="norm1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge12" value="after last layer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;strokeColor=#2369a3;" edge="1" parent="1" source="down" target="final">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge13" value="next token" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="final" target="token">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge14" value="read / write bytes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="cache" target="timing">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge15" value="weight bytes / compute ops" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=0;endArrow=block;dashed=1;strokeColor=#ab651d;" edge="1" parent="1" source="qkv" target="timing">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

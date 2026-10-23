@@ -92,9 +92,14 @@ package eth40_pkg;
 
     function automatic logic [15:0] ip_csum(input logic [17:0] base, input logic [15:0] tot,
                                             input logic [31:0] dip);
+        return ip_csum_fin(20'(base) + tot + dip[31:16] + dip[15:0]);
+    endfunction
+
+    // Свёртка 20-битной суммы в контрольную сумму. Сумма не переполняется: base < 2^18 плюс
+    // три слагаемых < 2^16, поэтому её можно копить по частям в разных тактах (тайминг 40G).
+    function automatic logic [15:0] ip_csum_fin(input logic [19:0] s0);
         logic [19:0] s;
-        s = 20'(base) + tot + dip[31:16] + dip[15:0];
-        s = 20'(s[15:0]) + s[19:16];
+        s = 20'(s0[15:0]) + s0[19:16];
         s = 20'(s[15:0]) + s[19:16];
         return ~s[15:0];
     endfunction

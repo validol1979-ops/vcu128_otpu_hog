@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openTPU — симуляция токена</title>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--fg:#17324d;--mut:#5b6f83;--line:#c9d6e3;--blk:#eef3f8;--act:#ffda85;--actb:#d77b12;--acc:#0b7285}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#11161c;--card:#1a222b;--fg:#e3ebf3;--mut:#93a4b5;--line:#33414f;--blk:#22303d;--act:#7a5a12;--actb:#ffb347;--acc:#66d9e8}}
+:root[data-theme=dark]{--bg:#11161c;--card:#1a222b;--fg:#e3ebf3;--mut:#93a4b5;--line:#33414f;--blk:#22303d;--act:#7a5a12;--actb:#ffb347;--acc:#66d9e8}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+header{padding:14px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+h1{font-size:20px;margin:0}header .sub{color:var(--mut)}
+nav{display:flex;gap:4px;padding:0 16px;flex-wrap:wrap}nav button{border:0;background:none;color:var(--mut);padding:8px 12px;border-bottom:2px solid transparent;cursor:pointer;font:inherit}
+nav button.on{color:var(--fg);border-color:var(--acc)}
+main{padding:12px 16px 40px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.ctl button,.ctl select{font:inherit;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer}
+.ctl input[type=range]{flex:1;min-width:160px}#clock{font-variant-numeric:tabular-nums;min-width:200px}
+.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:12px}@media(max-width:900px){.grid{grid-template-columns:1fr}}
+svg text{fill:var(--fg);font:16px system-ui}.blk rect{fill:var(--blk);stroke:var(--line);stroke-width:1.5}
+.blk.on rect{fill:var(--act);stroke:var(--actb);stroke-width:2.5}.edge{fill:none;stroke:var(--line);stroke-width:2}
+.edge.on{stroke-width:4;stroke-dasharray:9 6;animation:flow .6s linear infinite}@keyframes flow{to{stroke-dashoffset:-15}}
+.slot{fill:none;stroke:var(--line)}.slot.wait{fill:#fab005;stroke:#e67700}.slot.run{fill:#2f9e44;stroke:#2b8a3e}
+#active div{border-left:4px solid var(--line);padding:6px 8px;margin:6px 0;background:var(--blk);border-radius:4px}
+#active .op{font-weight:600}#active .pv{font-family:ui-monospace,monospace;font-size:12px;color:var(--mut);word-break:break-all}
+canvas{width:100%;display:block}.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mut)}.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}tr:hover{background:var(--blk);cursor:pointer}
+.kpi{display:flex;flex-wrap:wrap;gap:12px}.kpi div{background:var(--blk);border-radius:8px;padding:8px 12px}.kpi b{display:block;font-size:18px}
+.tab{display:none}.tab.on{display:block}input[type=search]{font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);width:260px;max-width:100%}
+.note{color:var(--mut);font-size:12.5px}
+</style>
+</head>
+<body>
+<header><h1>openTPU · один токен на слайсе VCU128</h1><span class="sub" id="sub"></span>
+<button id="theme" style="margin-left:auto" class="ctl">◐</button></header>
+<nav id="nav"><button data-t="t1" class="on">Схема и анимация</button><button data-t="t2">Таймлайн и счётчики</button><button data-t="t3">Внимание и числа</button><button data-t="t4">Память</button><button data-t="t5">Инструкции</button><button data-t="t6">Как читать</button></nav>
+<main>
+<div class="card ctl"><button id="b0">⏮</button><button id="bp">◀ инстр.</button><button id="play">▶ Пуск</button><button id="bn">инстр. ▶</button>
+<select id="speed"><option value="20">20 тактов/кадр</option><option value="60" selected>60 тактов/кадр</option><option value="200">200 тактов/кадр</option><option value="5">5 тактов/кадр</option></select>
+<input type="range" id="slider" min="0" value="0"><span id="clock"></span></div>
+
+<section class="tab on" id="t1"><div class="grid">
+<div class="card"><svg id="fp" viewBox="0 0 1120 660" role="img" aria-label="Схема слайса"></svg>
+<div class="legend"><span><i style="background:var(--act)"></i>блок работает</span><span>бегущий пунктир — данные идут по этому пути</span><span><i style="background:#fab005"></i>слот окна ждёт зависимостей</span><span><i style="background:#2f9e44"></i>исполняется</span></div></div>
+<div class="card"><b>Сейчас исполняются</b><div id="active"></div></div></div></section>
+
+<section class="tab" id="t2"><div class="card"><b>Диаграмма Ганта</b> <span class="note">щёлкните, чтобы перейти к такту; колёсико — масштаб</span><canvas id="gantt" height="250"></canvas><div class="legend" id="glegend"></div></div>
+<div class="card"><b>Порт B (128 B/такт), FIFO MXU, окно секвенсора</b><canvas id="ctr" height="260"></canvas></div></section>
+
+<section class="tab" id="t3"><div class="card"><b>Веса внимания текущего токена</b> <span class="note">строка — голова запроса; столбец — позиция KV-кэша; softmax = q·Kᵀ на MXU + exp2 на VPU</span><canvas id="att" height="200"></canvas></div>
+<div class="grid"><div class="card"><b>Логиты: симулятор против эталона float64</b><canvas id="sc" height="320"></canvas></div>
+<div class="card"><b>Алгоритмы на живых числах</b><div id="ex"></div></div></div></section>
+
+<section class="tab" id="t4"><div class="card"><b>HBM</b> <span class="note">образ: веса INT8 + масштабы, KV-кэш, I/O</span><canvas id="hbm" height="70"></canvas><div class="legend" id="hleg"></div></div>
+<div class="card"><b>TMEM</b> <span class="note">буферы FP32 программы</span><canvas id="tmem" height="70"></canvas></div>
+<div class="card"><b>Трафик по путям за токен</b><table id="traf"></table></div></section>
+
+<section class="tab" id="t5"><div class="card"><input type="search" id="q" placeholder="фильтр: MM, attention, слой 1…"> <span class="note">щелчок по строке — переход к инструкции</span>
+<table id="itab"><thead><tr><th>#</th><th>блок</th><th>операция</th><th>шаг</th><th>старт</th><th>тактов</th><th>ждала</th><th>что делает</th></tr></thead><tbody></tbody></table></div></section>
+
+<section class="tab" id="t6"><div class="card">
+<p><b>Что это.</b> Потактовая модель одного слайса openTPU с параметрами VCU128 (D=128, 4 колонки MXU, 8 полос, окно 16), исполняющая программу одного токена маленькой Qwen3 (форма и веса — как у <code>qwen-tiny</code> в upstream Lens). Числа настоящие: INT8-квантование, точная целая сумма в MXU, FP32-эпилог, KV-кэш в HBM. Время модельное, сверено с RTL (±4 %).</p>
+<p><b>Пути.</b> LD: HBM → порт B → DMA → TMEM. MM: строки весов (или K-кэша, Vᵀ) из HBM → порт B → FIFO MXU; масштабы — порт A; стационарный операнд — из ACT RAM; результат FP32 → TMEM. QACT: TMEM → QUANT → ACT RAM. QST: TMEM → QUANT → порт SW → HBM (запись K/V). VOP: TMEM → VPU → TMEM.</p>
+<p><b>Окно SEQ.</b> Секвенсор кладёт по инструкции за такт в 16 слотов. Жёлтый слот ждёт старшую конфликтующую инструкцию (RAW/WAR/WAW по TMEM, HBM, ACT), зелёный исполняется. MM стартует в две фазы: сначала «поток» (веса уже грузятся в FIFO), затем «счёт», когда готов операнд в ACT RAM.</p>
+<p><b>Почему так медленно считает MXU.</b> При одном токене (M=1) работает одна колонка из четырёх, и каждая строка весов в 128 байт обрабатывается за такт. Скорость задаёт порт B: 128 B/такт = 12,8 ГБ/с при 100 МГц.</p>
+</div></section>
+</main>
+<script>
+const D=/*DATA*/null;
+const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg';
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let T=0,timer=null;const C=D.cycles,I=D.instrs;
+$('sub').textContent=`pos ${D.pos} · ${I.length} инструкций · ${C.toLocaleString('ru')} тактов = ${(C/D.config.MHz).toFixed(1)} мкс · логиты: косинус ${D.check.cos.toFixed(4)} с эталоном`+(D.check.lens?` · RTL upstream ${D.check.lens.toLocaleString('ru')} тактов`:'');
+// tabs and theme
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#nav button,.tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');$(b.dataset.t).classList.add('on');drawAll()});
+$('theme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';drawAll()};
+// floorplan
+const S=1120/11.2,H=660;const box=n=>{const[x,y,w,h]=D.blocks[n];return{x:x*S,y:H-(y+h)*S,w:w*S,h:h*S}};
+const fp=$('fp');function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);(p||fp).appendChild(e);return e}
+const edges={};const keys=new Set();I.forEach(i=>i.paths.forEach(p=>keys.add(p)));
+const eg=el('g',{});keys.forEach(k=>{const[a,b]=k.split('-');const A=box(a),B=box(b);const x1=A.x+A.w/2,y1=A.y+A.h/2,x2=B.x+B.w/2,y2=B.y+B.h/2;
+ const rev=keys.has(b+'-'+a),dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy),ox=rev?-dy/L*10:0,oy=rev?dx/L*10:0;
+ edges[k]=el('path',{d:`M${x1+ox},${y1+oy} L${x2+ox},${y2+oy}`,class:'edge'},eg)});
+const blk={};Object.keys(D.blocks).forEach(n=>{const b=box(n),g=el('g',{class:'blk'});el('rect',{x:b.x,y:b.y,width:b.w,height:b.h,rx:10},g);
+ const lines=D.labels[n].split(' · ');lines.forEach((t,i)=>{const tx=el('text',{x:b.x+b.w/2,y:b.y+b.h/2+(i-(lines.length-1)/2)*19+5,'text-anchor':'middle'},g);tx.textContent=t;if(i==0)tx.style.fontWeight=600});blk[n]=g});
+// FIFO bar inside MXU, window slots inside SEQ
+const mb=box('MXU');const fifoBg=el('rect',{x:mb.x+8,y:mb.y+mb.h-16,width:mb.w-16,height:8,fill:'none',stroke:css('--line')});const fifoBar=el('rect',{x:mb.x+8,y:mb.y+mb.h-16,width:0,height:8,fill:'#d77b12'});
+const sb=box('SEQ'),slots=[];for(let k=0;k<D.config.WIN;k++)slots.push(el('rect',{x:sb.x+8+k*((sb.w-16)/16),y:sb.y+sb.h-18,width:(sb.w-16)/16-2,height:12,class:'slot'}));
+const unitBlock={DMA:'DMA',MXU:'MXU',QUANT:'QUANT',VPU:'VPU'};
+function at(t){return I.filter(i=>i.s!=null&&i.s<=t&&i.e!=null&&t<i.e)}
+function update(){
+ $('slider').value=T;$('clock').textContent=`такт ${T.toLocaleString('ru')} / ${C.toLocaleString('ru')} · ${(T/D.config.MHz).toFixed(2)} мкс`;
+ const act=at(T);const on=new Set(),bon=new Set(['SEQ']);
+ act.forEach(i=>{let ps=i.paths;if(i.op==='MM'&&i.r!=null&&T<i.r)ps=ps.filter(p=>/HBM|PORT/.test(p));ps.forEach(p=>{on.add(p);p.split('-').forEach(b=>bon.add(b))});bon.add(unitBlock[i.unit])});
+ for(const k in edges)edges[k].classList.toggle('on',on.has(k));for(const n in blk)blk[n].classList.toggle('on',bon.has(n));
+ act.forEach(i=>{i.paths.forEach(p=>{if(on.has(p))edges[p].style.stroke=D.colors[i.group]||'#d77b12'})});for(const k in edges)if(!on.has(k))edges[k].style.stroke='';
+ const b=Math.min(D.series.fifo.length-1,Math.floor(T/D.bucket));fifoBar.setAttribute('width',(mb.w-16)*D.series.fifo[b]/D.config.FIFO);
+ const win=I.filter(i=>i.d!=null&&i.d<=T&&(i.e==null||T<i.e)&&i.unit!=='SEQ');slots.forEach((s,k)=>{const i=win[k];s.setAttribute('class','slot'+(i?(i.s!=null&&i.s<=T?' run':' wait'):''))});
+ const box_=$('active');box_.replaceChildren();if(!act.length){box_.textContent='— (ожидание зависимостей или выборка)'}
+ act.forEach(i=>{const d=document.createElement('div');d.style.borderColor=D.colors[i.group]||'#adb5bd';
+  const ph=i.op==='MM'?(T<i.r?' · фаза: поток в FIFO':' · фаза: счёт и выгрузка'):'';
+  d.innerHTML=`<div class="op"></div><div class="tx"></div><div class="pv"></div>`;d.children[0].textContent=`#${i.id} ${i.unit} ${i.op}${i.layer>=0?' · слой '+i.layer:''} · ${i.step}${ph}`;
+  d.children[1].textContent=i.text;d.children[2].textContent=(i.op==='MM'&&T<i.r)?'веса идут в FIFO; результат появится после release':i.pv;box_.appendChild(d)});
+ drawCursor();
+}
+// gantt
+const rows=['DMA','MXU поток','MXU счёт','QUANT','VPU'];let gv=[0,C];
+function bars(){const o=[];I.forEach(i=>{if(i.s==null||i.e==null||i.unit==='SEQ')return;if(i.op==='MM'){o.push([1,i.s,i.r,i]);o.push([2,i.r,i.e,i])}else o.push([rows.indexOf(i.unit),i.s,i.e,i])});return o}
+const B=bars();
+function canvas(id){const c=$(id),r=c.getBoundingClientRect(),dpr=devicePixelRatio||1;c.width=r.width*dpr;c.height=c.getAttribute('height')*dpr;const g=c.getContext('2d');g.scale(dpr,dpr);return[g,r.width,+c.getAttribute('height')]}
+function drawGantt(){const[g,w,h]=canvas('gantt');const L=80,rh=(h-24)/rows.length;g.fillStyle=css('--fg');g.font='12px system-ui';
+ rows.forEach((r,k)=>g.fillText(r,4,k*rh+rh/2+4));const X=t=>L+(t-gv[0])/(gv[1]-gv[0])*(w-L-6);
+ B.forEach(([k,s,e,i])=>{if(e<gv[0]||s>gv[1])return;g.fillStyle=D.colors[i.group]||'#adb5bd';g.fillRect(X(s),k*rh+3,Math.max(1,X(e)-X(s)),rh-6)});
+ g.fillStyle=css('--mut');for(let k=0;k<=5;k++){const t=gv[0]+(gv[1]-gv[0])*k/5;g.fillText(Math.round(t).toLocaleString('ru'),X(t)-10,h-4)}}
+function drawCtr(){const[g,w,h]=canvas('ctr');const s=D.series,n=s.window.length,L=40,X=b=>L+b/n*(w-L-6);const pane=(h-10)/3;
+ const pm=s.portb_mxu||[],pd=s.portb_dma||[];g.font='11px system-ui';
+ for(let b=0;b<n;b++){const m=(pm[b]||0)/D.bucket,d=(pd[b]||0)/D.bucket;g.fillStyle='#d77b12';g.fillRect(X(b),pane-m*pane,Math.max(1,X(b+1)-X(b)),m*pane);g.fillStyle='#868e96';g.fillRect(X(b),pane-(m+d)*pane,Math.max(1,X(b+1)-X(b)),d*pane)}
+ g.strokeStyle='#d77b12';g.beginPath();for(let b=0;b<n;b++){const y=2*pane-s.fifo[b]/D.config.FIFO*pane*0.95;b?g.lineTo(X(b),y):g.moveTo(X(b),y)}g.stroke();
+ g.strokeStyle='#7048e8';g.beginPath();for(let b=0;b<n;b++){const y=3*pane-s.window[b]/D.config.WIN*pane*0.95;b?g.lineTo(X(b),y):g.moveTo(X(b),y)}g.stroke();
+ g.fillStyle=css('--fg');g.fillText('порт B',2,12);g.fillText('FIFO',2,pane+12);g.fillText('окно',2,2*pane+12)}
+function drawCursor(){if(!$('t2').classList.contains('on'))return;drawGantt();const c=$('gantt'),g=c.getContext('2d'),w=c.getBoundingClientRect().width,L=80;
+ const x=L+(T-gv[0])/(gv[1]-gv[0])*(w-L-6);g.strokeStyle='#e03131';g.lineWidth=2;g.beginPath();g.moveTo(x,0);g.lineTo(x,c.getBoundingClientRect().height);g.stroke()}
+$('gantt').onclick=e=>{const r=e.target.getBoundingClientRect();T=Math.round(gv[0]+(e.clientX-r.left-80)/(r.width-86)*(gv[1]-gv[0]));T=Math.max(0,Math.min(C,T));update()};
+$('gantt').onwheel=e=>{e.preventDefault();const span=gv[1]-gv[0],f=e.deltaY>0?1.4:1/1.4,ns=Math.min(C,Math.max(200,span*f));gv=[Math.max(0,T-ns/2),Math.min(C,T+ns/2)];drawGantt();drawCursor()};
+$('glegend').innerHTML=Object.entries(D.colors).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('');
+// attention heatmap
+function drawAtt(){const[g,w,h]=canvas('att');const ks=Object.keys(D.attention).sort();const R=[];const lab=[];
+ ks.forEach(k=>{D.attention[k].forEach((row,q)=>{const s=row.reduce((a,b)=>a+b,0);R.push(row.map(v=>v/s));lab.push(`сл.${k.split('|')[0]} ${k.split('|')[1].replace('attention, ','')} q${q}`)})});
+ if(!R.length)return;const n=R[0].length,L=170,rh=(h-20)/R.length;g.font='11px system-ui';
+ R.forEach((row,r)=>{const mx=Math.max(...row);row.forEach((v,c)=>{const t=v/mx;g.fillStyle=`rgb(${Math.round(30+225*t)},${Math.round(20+150*t*t)},${Math.round(80+40*(1-t))})`;g.fillRect(L+c/n*(w-L),r*rh,Math.ceil((w-L)/n),rh-1)});g.fillStyle=css('--fg');g.fillText(lab[r],2,r*rh+rh/2+4)});
+ g.fillStyle=css('--mut');g.fillText('позиция 0',L,h-4);g.fillText(`позиция ${n-1}`,w-70,h-4)}
+function drawSc(){const[g,w,h]=canvas('sc');const a=D.logits.ref,b=D.logits.sim;const lo=Math.min(...a,...b),hi=Math.max(...a,...b);const P=v=>30+(v-lo)/(hi-lo)*(Math.min(w,h)-40);
+ g.strokeStyle=css('--line');g.beginPath();g.moveTo(P(lo),h-P(lo));g.lineTo(P(hi),h-P(hi));g.stroke();g.fillStyle='#4263eb';a.forEach((x,i)=>g.fillRect(P(x)-1,h-P(b[i])-1,2.5,2.5));
+ g.fillStyle=css('--fg');g.font='12px system-ui';g.fillText('эталон float64 →',w/2-40,h-4);g.save();g.translate(12,h/2+40);g.rotate(-Math.PI/2);g.fillText('симулятор INT8 →',0,0);g.restore()}
+const ex=D.examples,exd=$('ex');const fmt=(k,e)=>k==='QACT'?`<b>QACT</b> — квантование: x = [${e.x} …], max|x| = ${e.maxabs.toPrecision(4)} → Sa = max/127 = ${e.scale.toPrecision(4)}, коды = round(x/Sa) = [${e.codes} …], ошибка ≤ ${e.err.toPrecision(3)}`:
+ k.startsWith('MM')?`<b>${k}</b> — ${e.text}<br>ACT = [${e.act} …]·Sa=${e.sa.toPrecision(4)}; W = [${e.w} …]·Sw=${e.sw.toPrecision(4)}; целая сумма = ${e.acc}; y = acc·Sw·Sa = ${e.y.toPrecision(5)}`:
+ k==='QST'?`<b>QST</b> — запись KV: k = [${e.x} …] → масштаб ${e.scale.toPrecision(4)}, INT8 [${e.codes} …] → HBM`:'';
+exd.innerHTML=Object.entries(ex).map(([k,e])=>fmt(k,e)).filter(Boolean).map(s=>`<p>${s}</p>`).join('');
+// memory
+const kc={weights:'#2f9e44',scales:'#94d82d',kv:'#e8590c',io:'#868e96',norms:'#4dabf7'};$('hleg').innerHTML=Object.entries(kc).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('');
+function drawMem(){let[g,w,h]=canvas('hbm');const top=Math.max(...D.hbm.map(r=>r.addr+r.n));D.hbm.forEach(r=>{g.fillStyle=kc[r.kind]||'#ccc';g.fillRect(r.addr/top*w,5,Math.max(1,r.n/top*w),h-25)});g.fillStyle=css('--mut');g.font='11px system-ui';g.fillText(`0 … ${(top/1048576).toFixed(2)} МиБ`,4,h-4);
+ [g,w,h]=canvas('tmem');const tt=Math.max(...D.tmem.map(r=>r.addr+r.n));D.tmem.forEach((r,i)=>{g.fillStyle=`hsl(${i*47%360},55%,60%)`;g.fillRect(r.addr/tt*w,5,Math.max(1,r.n/tt*w),h-25);if(r.n/tt*w>40){g.fillStyle='#111';g.fillText(r.name,r.addr/tt*w+2,30)}});g.fillStyle=css('--mut');g.fillText(`0 … ${tt.toLocaleString('ru')} слов FP32`,4,h-4)}
+const tr=$('traf');tr.innerHTML='<tr><th>путь</th><th>байт</th></tr>'+Object.entries(D.traffic).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${k.replace('-',' → ')}</td><td>${v.toLocaleString('ru')}</td></tr>`).join('');
+// instruction table
+const tb=document.querySelector('#itab tbody');function fill(f){tb.replaceChildren();I.filter(i=>!f||(i.op+' '+i.step+' '+i.text+' слой '+i.layer).toLowerCase().includes(f)).forEach(i=>{const r=document.createElement('tr');
+ [i.id,i.unit,i.op,i.step+(i.layer>=0?' · сл.'+i.layer:''),i.s,(i.e??0)-(i.s??0),(i.s??0)-(i.d??0),i.text].forEach(v=>{const td=document.createElement('td');td.textContent=v;r.appendChild(td)});r.onclick=()=>{T=i.s||0;document.querySelector('[data-t=t1]').click();update()};tb.appendChild(r)})}
+fill('');$('q').oninput=e=>fill(e.target.value.toLowerCase());
+// controls
+$('slider').max=C;$('slider').oninput=e=>{stop();T=+e.target.value;update()};
+const starts=[...new Set(I.map(i=>i.s).filter(v=>v!=null))].sort((a,b)=>a-b);
+$('bn').onclick=()=>{stop();T=starts.find(s=>s>T)??C;update()};$('bp').onclick=()=>{stop();T=[...starts].reverse().find(s=>s<T)??0;update()};$('b0').onclick=()=>{stop();T=0;update()};
+function stop(){clearInterval(timer);timer=null;$('play').textContent='▶ Пуск'}
+$('play').onclick=()=>{if(timer)return stop();if(T>=C)T=0;$('play').textContent='❚❚ Пауза';timer=setInterval(()=>{T=Math.min(C,T+ +$('speed').value);update();if(T>=C)stop()},40)};
+function drawAll(){update();if($('t2').classList.contains('on')){drawGantt();drawCtr();drawCursor()}if($('t3').classList.contains('on')){drawAtt();drawSc()}if($('t4').classList.contains('on'))drawMem()}
+addEventListener('resize',drawAll);addEventListener('keydown',e=>{if(e.key===' '){e.preventDefault();$('play').click()}if(e.key==='ArrowRight')$('bn').click();if(e.key==='ArrowLeft')$('bp').click()});
+T=starts[Math.min(5,starts.length-1)]||0;drawAll();
+</script>
+</body>
+</html>

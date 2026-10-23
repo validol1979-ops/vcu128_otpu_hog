@@ -2,3 +2,6 @@ vcu128_otpu/constr/vcu128_otpu.xdc
 vcu128_otpu/src/lib/verilog-axi/syn/vivado/axil_cdc.tcl nosynth
 vcu128_otpu/src/otpu-fesens/boards/ypcb-00338/constraints/otpu_mem_ch.tcl nosynth scoped_to_ref=otpu_mem_ch
 vcu128_otpu/constr/vcu128_cdc.tcl nosynth
+vcu128_otpu/constr/vcu128_thermal.tcl nosynth
+vcu128_otpu/constr/vcu128_floorplan.tcl nosynth
+vcu128_otpu/constr/tmem_uram.xdc noimpl

@@ -1,0 +1,10 @@
+#!/bin/sh
+# VCU128 openTPU: NetworkManager при деактивации профиля (Link Down, перепрошивка платы)
+# снимает все адреса устройства; при повторной активации возвращаем OTPU_ADDR.
+# Устанавливается tools/host/install.sh в /etc/NetworkManager/dispatcher.d/.
+[ -r /etc/default/otpu-host-40g ] && . /etc/default/otpu-host-40g
+[ "$1" = "${OTPU_IFACE:-enp8s0d1}" ] || exit 0
+case "$2" in
+    up|reapply) exec /usr/local/sbin/otpu-host-40g apply ;;
+esac
+exit 0

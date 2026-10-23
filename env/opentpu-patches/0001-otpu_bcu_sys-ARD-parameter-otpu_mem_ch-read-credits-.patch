@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:21:37 +0300
+Subject: [PATCH 1/8] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per
+ channel)
+
+The accelerator's read stream per channel is at most ARD beats per round trip
+through the controller. 64 (the DDR4 cores') limits an HBM channel: in
+vcu128_otpu sim/hbm (otpu_mem_ch + otpu_hbm_port NS 2, fixed HBM latency) the
+stream at a 200 MHz core is 7.7 GB/s of 12.8 at a latency of 100 uclk cycles,
+12.5 at ARD 256 (latency 80). Default 64: BCU1525 unchanged.
+
+diff --git a/rtl/boards/bcu1525/otpu_bcu_sys.sv b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+index 039fdfb1..590ca1f1 100644
+--- a/rtl/boards/bcu1525/otpu_bcu_sys.sv
++++ b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+@@ -52,6 +52,10 @@ module otpu_bcu_sys #(
+   // slice 1 in SLR2 on C2 in SLR1: channels 1 and 3; constraints/bcu1525_floorplan.xdc): two
+   // otpu_native_reg, u_tx with the slice and u_rx with the channel, flip-flop to flip-flop across
+   parameter logic [3:0] SLL = 4'b1010,
++  // otpu_mem_ch's accelerator read credits (beats in flight per channel): the read stream's rate is
++  // at most ARD beats per round trip through the controller, so a memory of a longer latency (HBM)
++  // needs more than the DDR4 cores' 64. Not a target parameter: the core does not see it.
++  parameter int ARD        = 64,
+   parameter int NC         = 2 * S          // memory channels (two per slice)
+ ) (
+   // core clock and reset (synchronous, high), XDMA's clock and reset
+@@ -167,7 +171,7 @@ module otpu_bcu_sys #(
+       assign b_wdone[j] = n_wdone[j];   assign b_err[j] = n_err[j];
+     end
+     logic bid, rid;                   // (XIDW 1: XDMA's IDs stay in the SmartConnect)
+-    otpu_mem_ch #(.XIDW(1)) u_ch (
++    otpu_mem_ch #(.XIDW(1), .ARD(ARD)) u_ch (
+       .clk, .rst,
+       .n_cvalid(n_cvalid[j]), .n_cready(n_cready[j]), .n_cwe(n_cwe[j]), .n_caddr(n_caddr[j]),
+       .n_wvalid(n_wvalid[j]), .n_wready(n_wready[j]), .n_wdata(n_wdata[j]),

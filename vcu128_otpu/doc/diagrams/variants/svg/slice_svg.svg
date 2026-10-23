@@ -1,0 +1,261 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1420" width="2000" height="1420">
+<style>:root{--bg:#ffffff;--fg:#1d232b;--muted:#5b6672;--frame:#396484;--slicebg:#f7f9fc;--seq:#7b55b8;--seqbg:#f1eafc;--mxu:#c96d0c;--mxubg:#fff2e2;--tmem:#1b6fb8;--tmembg:#e3f1ff;--quant:#2b8a3e;--quantbg:#e8f6eb;--act:#a07a12;--actbg:#fff6d8;--mem:#b8572e;--membg:#ffe8dc;--ext:#3f7d5a;--extbg:#e8f4ec;--unit:#41566b;--unitbg:#eef3f8;--vpu:#2f6fd0;--vpubg:#e8f0ff;--data:#396484;--gray:#6f6f6f}@media (prefers-color-scheme: dark){:root{--bg:#16191d;--fg:#e6e9ee;--muted:#9aa4af;--frame:#7fa7c6;--slicebg:#1b2026;--seq:#b49ae6;--seqbg:#2a2338;--mxu:#f0a24a;--mxubg:#352819;--tmem:#6fb1ec;--tmembg:#18293a;--quant:#69c27c;--quantbg:#1b2e20;--act:#e0bd55;--actbg:#332c15;--mem:#ee9a74;--membg:#3a2219;--ext:#7cc29b;--extbg:#1c2c23;--unit:#9fb4c8;--unitbg:#1f262e;--vpu:#7aa9f0;--vpubg:#1c2436;--data:#8fb6d6;--gray:#a8a8a8}}svg{background:var(--bg)}text{font-family:system-ui,'Noto Sans','DejaVu Sans',Arial,sans-serif;fill:var(--fg)}.t{font-size:12.5px}.tb{font-size:13px;font-weight:600}.title{font-size:20px;font-weight:600}.fl{font-size:14px;font-weight:600;paint-order:stroke;stroke:var(--slicebg);stroke-width:6px;stroke-linejoin:round}.lb{font-size:11.5px;paint-order:stroke;stroke:var(--slicebg);stroke-width:4px;stroke-linejoin:round}.box{stroke-width:1.3}.frame{stroke-width:1.5}.ln{fill:none;stroke-linecap:round;stroke-linejoin:round}.halo{fill:none;stroke:var(--slicebg);stroke-linecap:butt}</style>
+<rect x="0" y="0" width="2000" height="1420" style="fill:var(--bg)"/>
+<text x="1000.0" y="34" class="title" text-anchor="middle">Слайс openTPU (otpu_slice) на VCU128: S = 1, D = 128, MCOLS = 4, LANES = 8, WIN = 16, core_clk 100 МГц</text>
+<rect x="20" y="175" width="1580" height="1230" rx="12" class="frame" style="fill:var(--slicebg);stroke:var(--frame)"/>
+<rect x="40" y="200" width="1545" height="122" rx="12" class="frame" style="fill:none;stroke:var(--seq)"/>
+<rect x="470" y="385" width="530" height="587" rx="12" class="frame" style="fill:none;stroke:var(--mxu)"/>
+<rect x="40" y="1030" width="1545" height="360" rx="12" class="frame" style="fill:none;stroke:var(--tmem)"/>
+<rect x="780" y="64" width="400" height="74" rx="7" class="box" style="fill:var(--extbg);stroke:var(--ext)"/>
+<text x="980.0" y="90.5" class="tb" text-anchor="middle">otpu_ctrl (s_ctl 0x00000)</text>
+<text x="980.0" y="106.0" class="t" text-anchor="middle">CTRL: RUN / LOAD / CLEAR · ARG0..7</text>
+<text x="980.0" y="121.5" class="t" text-anchor="middle">STATUS · счётчики · буфер трассы</text>
+<rect x="1660" y="215" width="315" height="80" rx="7" class="box" style="fill:var(--extbg);stroke:var(--ext)"/>
+<text x="1817.5" y="244.5" class="tb" text-anchor="middle">otpu_coll (общий на S слайсов)</text>
+<text x="1817.5" y="260.0" class="t" text-anchor="middle">BAR · GATHER: сегменты слайсов</text>
+<text x="1817.5" y="275.5" class="t" text-anchor="middle">→ TMEM всех слайсов</text>
+<rect x="1690" y="420" width="260" height="320" rx="7" class="box" style="fill:var(--membg);stroke:var(--mem)"/>
+<text x="1820.0" y="530.75" class="tb" text-anchor="middle">память слайса</text>
+<text x="1820.0" y="546.25" class="t" text-anchor="middle">otpu_native_dram</text>
+<text x="1820.0" y="561.75" class="t" text-anchor="middle"></text>
+<text x="1820.0" y="577.25" class="t" text-anchor="middle">2 канала, beat 64 B,</text>
+<text x="1820.0" y="592.75" class="t" text-anchor="middle">чередование + CHASH</text>
+<text x="1820.0" y="608.25" class="t" text-anchor="middle"></text>
+<text x="1820.0" y="623.75" class="t" text-anchor="middle">→ otpu_mem_ch ×2</text>
+<text x="1820.0" y="639.25" class="t" text-anchor="middle">→ otpu_hbm_port ×2 → HBM</text>
+<rect x="60" y="228" width="360" height="80" rx="7" class="box" style="fill:var(--seqbg);stroke:var(--seq)"/>
+<text x="240.0" y="257.5" class="tb" text-anchor="middle">загрузчик программы</text>
+<text x="240.0" y="273.0" class="t" text-anchor="middle">HBM → IMEM, 1 чанк = 4 инстр./такт</text>
+<text x="240.0" y="288.5" class="t" text-anchor="middle">(старт и HALT CHAIN)</text>
+<rect x="470" y="228" width="310" height="80" rx="7" class="box" style="fill:var(--seqbg);stroke:var(--seq)"/>
+<text x="625.0" y="257.5" class="tb" text-anchor="middle">IMEM</text>
+<text x="625.0" y="273.0" class="t" text-anchor="middle">4096 инструкций × 256 бит</text>
+<text x="625.0" y="288.5" class="t" text-anchor="middle">чтение на такт вперёд</text>
+<rect x="830" y="228" width="360" height="80" rx="7" class="box" style="fill:var(--seqbg);stroke:var(--seq)"/>
+<text x="1010.0" y="257.5" class="tb" text-anchor="middle">выборка + декод: 1 инстр./такт</text>
+<text x="1010.0" y="273.0" class="t" text-anchor="middle">R0..R15, LI / ADDI / LOOP (до 4 уровней)</text>
+<text x="1010.0" y="288.5" class="t" text-anchor="middle">w1..w3 += R[ra..rc]</text>
+<rect x="1240" y="228" width="330" height="80" rx="7" class="box" style="fill:var(--seqbg);stroke:var(--seq)"/>
+<text x="1405.0" y="257.5" class="tb" text-anchor="middle">окно WIN = 16 + табло</text>
+<text x="1405.0" y="273.0" class="t" text-anchor="middle">отпечатки диапазонов TMEM / HBM / ACT</text>
+<text x="1405.0" y="288.5" class="t" text-anchor="middle">RAW / WAR / WAW → старт старшей готовой</text>
+<rect x="95" y="400" width="285" height="82" rx="7" class="box" style="fill:var(--quantbg);stroke:var(--quant)"/>
+<text x="237.5" y="422.75" class="tb" text-anchor="middle">QUANT — otpu_quant</text>
+<text x="237.5" y="438.25" class="t" text-anchor="middle">8 FP32/такт, 2 прохода (max → коды)</text>
+<text x="237.5" y="453.75" class="t" text-anchor="middle">буфер строки 1024 чанка</text>
+<text x="237.5" y="469.25" class="t" text-anchor="middle">CSCALE / RSCALE</text>
+<rect x="95" y="712" width="285" height="82" rx="7" class="box" style="fill:var(--actbg);stroke:var(--act)"/>
+<text x="237.5" y="742.5" class="tb" text-anchor="middle">ACT RAM — otpu_actram</text>
+<text x="237.5" y="758.0" class="t" text-anchor="middle">4 строки × 128 блоков × 128 B INT8</text>
+<text x="237.5" y="773.5" class="t" text-anchor="middle">+ {da, Sa} на (строку, блок)</text>
+<rect x="620" y="415" width="365" height="50" rx="7" class="box" style="fill:var(--mxubg);stroke:var(--mxu)"/>
+<text x="802.5" y="437.25" class="tb" text-anchor="middle">issuer (ustart)</text>
+<text x="802.5" y="452.75" class="t" text-anchor="middle">запросы N×KB чанков + строк масштабов</text>
+<rect x="620" y="478" width="365" height="50" rx="7" class="box" style="fill:var(--mxubg);stroke:var(--mxu)"/>
+<text x="802.5" y="500.25" class="tb" text-anchor="middle">FIFO чанков</text>
+<text x="802.5" y="515.75" class="t" text-anchor="middle">1024 × 128 B</text>
+<rect x="830" y="556" width="155" height="50" rx="7" class="box" style="fill:var(--mxubg);stroke:var(--mxu)"/>
+<text x="907.5" y="578.25" class="tb" text-anchor="middle">FIFO масштабов</text>
+<text x="907.5" y="593.75" class="t" text-anchor="middle">Sw, dw по блокам</text>
+<rect x="490" y="712" width="310" height="82" rx="7" class="box" style="fill:var(--mxubg);stroke:var(--mxu)"/>
+<text x="645.0" y="742.5" class="tb" text-anchor="middle">систолический массив (urel)</text>
+<text x="645.0" y="758.0" class="t" text-anchor="middle">4 колонки × 128 INT8·INT8</text>
+<text x="645.0" y="773.5" class="t" text-anchor="middle">цепочки DSP48E2 по 16 · точная сумма</text>
+<rect x="490" y="868" width="495" height="76" rx="7" class="box" style="fill:var(--mxubg);stroke:var(--mxu)"/>
+<text x="737.5" y="903.25" class="tb" text-anchor="middle">FIFO результатов → эпилог, 2 полосы</text>
+<text x="737.5" y="918.75" class="t" text-anchor="middle">i2f · ×Sw · ×Sa·2⁻¹⁶ · ACC / ASCALE / RMAX</text>
+<polygon points="1040,418 1244,418 1262,469.0 1244,520 1040,520" class="box" style="fill:var(--membg);stroke:var(--mem)"/>
+<text x="1142.0" y="450.75" class="tb" text-anchor="middle">порт B</text>
+<text x="1142.0" y="466.25" class="t" text-anchor="middle">128 B/такт (1024 бит)</text>
+<text x="1142.0" y="481.75" class="t" text-anchor="middle">DMA, затем поток MXU,</text>
+<text x="1142.0" y="497.25" class="t" text-anchor="middle">загрузчик</text>
+<polygon points="1040,538 1244,538 1262,567.0 1244,596 1040,596" class="box" style="fill:var(--membg);stroke:var(--mem)"/>
+<text x="1142.0" y="564.25" class="tb" text-anchor="middle">порт A</text>
+<text x="1142.0" y="579.75" class="t" text-anchor="middle">строки 32 B: масштабы MXU</text>
+<polygon points="1040,664 1244,664 1262,694.0 1244,724 1040,724" class="box" style="fill:var(--membg);stroke:var(--mem)"/>
+<text x="1142.0" y="683.5" class="tb" text-anchor="middle">порт SW</text>
+<text x="1142.0" y="699.0" class="t" text-anchor="middle">32 бит/такт + маска байт</text>
+<text x="1142.0" y="714.5" class="t" text-anchor="middle">QST (KV-кэш)</text>
+<rect x="1300" y="780" width="270" height="76" rx="7" class="box" style="fill:var(--unitbg);stroke:var(--unit)"/>
+<text x="1435.0" y="807.5" class="tb" text-anchor="middle">DMA — otpu_dma</text>
+<text x="1435.0" y="823.0" class="t" text-anchor="middle">LD / ST: чанк 128 B ↔ 8 слов FP32</text>
+<text x="1435.0" y="838.5" class="t" text-anchor="middle">буфер LD 128 · WAITW · DSTEP/STREAM</text>
+<rect x="1300" y="890" width="270" height="96" rx="7" class="box" style="fill:var(--vpubg);stroke:var(--vpu)"/>
+<text x="1435.0" y="919.75" class="tb" text-anchor="middle">VPU — otpu_vpu</text>
+<text x="1435.0" y="935.25" class="t" text-anchor="middle">8 полос FP32 + составные</text>
+<text x="1435.0" y="950.75" class="t" text-anchor="middle">exp2, recip, rsqrt, log2 · редукция</text>
+<text x="1435.0" y="966.25" class="t" text-anchor="middle">SE: хвост stream engine (DeltaNet)</text>
+<rect x="60" y="1056" width="1505" height="54" rx="7" class="box" style="fill:var(--tmembg);stroke:var(--tmem)"/>
+<text x="812.5" y="1080.25" class="tb" text-anchor="middle">арбитр банков: каждый такт, всё-или-ничего</text>
+<text x="812.5" y="1095.75" class="t" text-anchor="middle">приоритет DMA &gt; COLL &gt; VPU &gt; выгрузка MXU &gt; QUANT</text>
+<rect x="470" y="1196" width="710" height="178" rx="7" class="box" style="fill:var(--tmembg);stroke:var(--tmem)"/>
+<text x="825.0" y="1259.0" class="tb" text-anchor="middle">65536 × FP32 = 256 KiB, 8 банков (адрес mod 8)</text>
+<text x="825.0" y="1274.5" class="t" text-anchor="middle">на FPGA — копия памяти на каждый порт чтения</text>
+<text x="825.0" y="1290.0" class="t" text-anchor="middle"></text>
+<text x="825.0" y="1305.5" class="t" text-anchor="middle">8 портов чтения: MXU, DMA, Q, VA, VB, Q2, Q3, COLL</text>
+<text x="825.0" y="1321.0" class="t" text-anchor="middle">4 порта записи: DMA, MXU, COLL, VPU</text>
+<path d="M420,268 L461.44,268.0" class="halo" style="stroke-width:8.6"/>
+<path d="M420,268 L461.44,268.0" class="ln" style="stroke:var(--seq);stroke-width:1.6"/>
+<polygon points="470,268 459.4,262.1 459.4,273.9" style="fill:var(--seq)"/>
+<path d="M780,268 L821.44,268.0" class="halo" style="stroke-width:8.6"/>
+<path d="M780,268 L821.44,268.0" class="ln" style="stroke:var(--seq);stroke-width:1.6"/>
+<polygon points="830,268 819.4,262.1 819.4,273.9" style="fill:var(--seq)"/>
+<path d="M1190,268 L1231.44,268.0" class="halo" style="stroke-width:8.6"/>
+<path d="M1190,268 L1231.44,268.0" class="ln" style="stroke:var(--seq);stroke-width:1.6"/>
+<polygon points="1240,268 1229.4,262.1 1229.4,273.9" style="fill:var(--seq)"/>
+<path d="M780,101 L249.0,101.0 Q240,101 240.0,110.0 L240.0,219.92" class="halo" style="stroke-width:8.3"/>
+<path d="M780,101 L249.0,101.0 Q240,101 240.0,110.0 L240.0,219.92" class="ln" style="stroke:var(--ext);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="240,228 245.6,217.9 234.4,217.9" style="fill:var(--ext)"/>
+<text x="510" y="94" class="lb" style="fill:var(--ext)" text-anchor="middle">LOAD: PROG_ADDR, PROG_N</text>
+<path d="M1010,138 L1010.0,219.92" class="halo" style="stroke-width:8.3"/>
+<path d="M1010,138 L1010.0,219.92" class="ln" style="stroke:var(--ext);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1010,228 1015.6,217.9 1004.4,217.9" style="fill:var(--ext)"/>
+<text x="1020" y="186" class="lb" style="fill:var(--ext)" text-anchor="start">RUN · ARG0..7 → R8..R15</text>
+<path d="M1405,228 L1405.0,110.0 Q1405,101 1396.0,101.0 L1188.08,101.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1405,228 L1405.0,110.0 Q1405,101 1396.0,101.0 L1188.08,101.0" class="ln" style="stroke:var(--ext);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1180,101 1190.1,106.6 1190.1,95.4" style="fill:var(--ext)"/>
+<text x="1415" y="160" class="lb" style="fill:var(--ext)" text-anchor="start">HALTED / ERROR / icount</text>
+<path d="M1570,255 L1651.92,255.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1570,255 L1651.92,255.0" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1660,255 1649.9,249.4 1649.9,260.6" style="fill:var(--seq)"/>
+<text x="1615" y="246" class="lb" style="fill:var(--seq)" text-anchor="middle">BAR / GATHER</text>
+<path d="M1405,308 L1405.0,351.0 Q1405,360 1396.0,360.0 L249.0,360.0 Q240,360 240.0,369.0 L240.0,391.92" class="halo" style="stroke-width:8.3"/>
+<path d="M1405,308 L1405.0,351.0 Q1405,360 1396.0,360.0 L249.0,360.0 Q240,360 240.0,369.0 L240.0,391.92" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="240,400 245.6,389.9 234.4,389.9" style="fill:var(--seq)"/>
+<text x="830" y="354" class="lb" style="fill:var(--seq)" text-anchor="start">старт команд (конфликты в окне сняты)</text>
+<path d="M815,360 L815.0,406.92" class="halo" style="stroke-width:8.3"/>
+<path d="M815,360 L815.0,406.92" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="815,415 820.6,404.9 809.4,404.9" style="fill:var(--seq)"/>
+<path d="M540,360 L540.0,703.92" class="halo" style="stroke-width:8.3"/>
+<path d="M540,360 L540.0,703.92" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="540,712 545.6,701.9 534.4,701.9" style="fill:var(--seq)"/>
+<text x="548" y="690" class="lb" style="fill:var(--seq)" text-anchor="start">urel</text>
+<path d="M1570,290 L1579.0,290.0 Q1588,290 1588.0,299.0 L1588.0,813.0 Q1588,818 1583.0,818.0 L1578.08,818.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1570,290 L1579.0,290.0 Q1588,290 1588.0,299.0 L1588.0,813.0 Q1588,818 1583.0,818.0 L1578.08,818.0" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1570,818 1580.1,823.6 1580.1,812.4" style="fill:var(--seq)"/>
+<path d="M1588,818 L1588.0,933.0 Q1588,938 1583.0,938.0 L1578.08,938.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1588,818 L1588.0,933.0 Q1588,938 1583.0,938.0 L1578.08,938.0" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1570,938 1580.1,943.6 1580.1,932.4" style="fill:var(--seq)"/>
+<path d="M985,440 L1032.08,440.0" class="halo" style="stroke-width:8.2"/>
+<path d="M985,440 L1032.08,440.0" class="ln" style="stroke:var(--mxu);stroke-width:1.2;stroke-dasharray:7 5"/>
+<polygon points="1040,440 1030.1,434.6 1030.1,445.4" style="fill:var(--mxu)"/>
+<path d="M985,455 L1006.0,455.0 Q1015,455 1015.0,464.0 L1015.0,543.5 Q1015,552 1023.5,552.0 L1032.08,552.0" class="halo" style="stroke-width:8.2"/>
+<path d="M985,455 L1006.0,455.0 Q1015,455 1015.0,464.0 L1015.0,543.5 Q1015,552 1023.5,552.0 L1032.08,552.0" class="ln" style="stroke:var(--mxu);stroke-width:1.2;stroke-dasharray:7 5"/>
+<polygon points="1040,552 1030.1,546.6 1030.1,557.4" style="fill:var(--mxu)"/>
+<text x="1012" y="432" class="lb" style="fill:var(--mxu)" text-anchor="middle">запросы</text>
+<path d="M1273.12,469.0 L1678.88,469.0" class="halo" style="stroke-width:10.2"/>
+<path d="M1273.12,469.0 L1678.88,469.0" class="ln" style="stroke:var(--mem);stroke-width:3.2"/>
+<polygon points="1690,469 1676.9,461.2 1676.9,476.8" style="fill:var(--mem)"/>
+<polygon points="1262,469 1275.1,476.8 1275.1,461.2" style="fill:var(--mem)"/>
+<text x="1476" y="460" class="lb" style="fill:var(--mem)" text-anchor="middle">чтение / запись чанков</text>
+<path d="M1690,567 L1270.88,567.0" class="halo" style="stroke-width:8.8"/>
+<path d="M1690,567 L1270.88,567.0" class="ln" style="stroke:var(--mem);stroke-width:1.8"/>
+<polygon points="1262,567 1272.9,573.2 1272.9,560.8" style="fill:var(--mem)"/>
+<text x="1476" y="558" class="lb" style="fill:var(--mem)" text-anchor="middle">чтение строк</text>
+<path d="M1262,694 L1681.76,694.0" class="halo" style="stroke-width:8.4"/>
+<path d="M1262,694 L1681.76,694.0" class="ln" style="stroke:var(--mem);stroke-width:1.4"/>
+<polygon points="1690,694 1679.8,688.3 1679.8,699.7" style="fill:var(--mem)"/>
+<text x="1476" y="685" class="lb" style="fill:var(--mem)" text-anchor="middle">запись слов</text>
+<path d="M1200,418 L1200.0,349.0 Q1200,340 1191.0,340.0 L159.0,340.0 Q150,340 150.0,331.0 L150.0,316.56" class="halo" style="stroke-width:8.6"/>
+<path d="M1200,418 L1200.0,349.0 Q1200,340 1191.0,340.0 L159.0,340.0 Q150,340 150.0,331.0 L150.0,316.56" class="ln" style="stroke:var(--data);stroke-width:1.6"/>
+<polygon points="150,308 144.1,318.6 155.9,318.6" style="fill:var(--data)"/>
+<text x="700" y="333" class="lb" style="fill:var(--data)" text-anchor="middle">программа: HBM → загрузчик (порт B)</text>
+<path d="M1150.0,531.12 L1150.0,531.6 Q1150,532 1150.4,532.0 L1341.0,532.0 Q1350,532 1350.0,541.0 L1350.0,768.88" class="halo" style="stroke-width:10.2"/>
+<path d="M1150.0,531.12 L1150.0,531.6 Q1150,532 1150.4,532.0 L1341.0,532.0 Q1350,532 1350.0,541.0 L1350.0,768.88" class="ln" style="stroke:var(--data);stroke-width:3.2"/>
+<polygon points="1350,780 1357.8,766.9 1342.2,766.9" style="fill:var(--data)"/>
+<polygon points="1150,520 1142.2,533.1 1157.8,533.1" style="fill:var(--data)"/>
+<text x="1358" y="760" class="lb" style="fill:var(--data)" text-anchor="start">LD / ST</text>
+<path d="M1040,503 L996.12,503.0" class="halo" style="stroke-width:10.2"/>
+<path d="M1040,503 L996.12,503.0" class="ln" style="stroke:var(--mxu);stroke-width:3.2"/>
+<polygon points="985,503 998.1,510.8 998.1,495.2" style="fill:var(--mxu)"/>
+<text x="1012" y="520" class="lb" style="fill:var(--mxu)" text-anchor="middle">веса</text>
+<path d="M1040,581 L993.88,581.0" class="halo" style="stroke-width:8.8"/>
+<path d="M1040,581 L993.88,581.0" class="ln" style="stroke:var(--mxu);stroke-width:1.8"/>
+<polygon points="985,581 995.9,587.2 995.9,574.8" style="fill:var(--mxu)"/>
+<path d="M700,528 L700.0,700.88" class="halo" style="stroke-width:10.2"/>
+<path d="M700,528 L700.0,700.88" class="ln" style="stroke:var(--mxu);stroke-width:3.2"/>
+<polygon points="700,712 707.8,698.9 692.2,698.9" style="fill:var(--mxu)"/>
+<text x="708" y="640" class="lb" style="fill:var(--mxu)" text-anchor="start">1 чанк/такт: веса, K-строки, Vᵀ</text>
+<path d="M380,753 L478.88,753.0" class="halo" style="stroke-width:10.2"/>
+<path d="M380,753 L478.88,753.0" class="ln" style="stroke:var(--act);stroke-width:3.2"/>
+<polygon points="490,753 476.9,745.2 476.9,760.8" style="fill:var(--act)"/>
+<text x="413" y="730" class="lb" style="fill:var(--act)" text-anchor="middle">4 строки ×</text>
+<text x="413" y="744" class="lb" style="fill:var(--act)" text-anchor="middle">блок + Sa</text>
+<path d="M640,794 L640.0,858.48" class="halo" style="stroke-width:9.2"/>
+<path d="M640,794 L640.0,858.48" class="ln" style="stroke:var(--mxu);stroke-width:2.2"/>
+<polygon points="640,868 646.6,856.5 633.4,856.5" style="fill:var(--mxu)"/>
+<path d="M910,606 L910.0,859.76" class="halo" style="stroke-width:8.4"/>
+<path d="M910,606 L910.0,859.76" class="ln" style="stroke:var(--mxu);stroke-width:1.4"/>
+<polygon points="910,868 915.7,857.8 904.3,857.8" style="fill:var(--mxu)"/>
+<text x="918" y="740" class="lb" style="fill:var(--mxu)" text-anchor="start">Sw, dw</text>
+<path d="M600,944 L600.0,1046.48" class="halo" style="stroke-width:9.2"/>
+<path d="M600,944 L600.0,1046.48" class="ln" style="stroke:var(--mxu);stroke-width:2.2"/>
+<polygon points="600,1056 606.6,1044.5 593.4,1044.5" style="fill:var(--mxu)"/>
+<text x="592" y="962" class="lb" style="fill:var(--mxu)" text-anchor="end">≤ 2 FP32/такт</text>
+<path d="M880,1056 L880.0,952.08" class="halo" style="stroke-width:8.3"/>
+<path d="M880,1056 L880.0,952.08" class="ln" style="stroke:var(--mxu);stroke-width:1.3;stroke-dasharray:2 4"/>
+<polygon points="880,944 874.4,954.1 885.6,954.1" style="fill:var(--mxu)"/>
+<text x="872" y="962" class="lb" style="fill:var(--mxu)" text-anchor="end">ACC / ASCALE: старое значение</text>
+<path d="M240,482 L240.0,700.88" class="halo" style="stroke-width:10.2"/>
+<path d="M240,482 L240.0,700.88" class="ln" style="stroke:var(--quant);stroke-width:3.2"/>
+<polygon points="240,712 247.8,698.9 232.2,698.9" style="fill:var(--quant)"/>
+<text x="248" y="600" class="lb" style="fill:var(--quant)" text-anchor="start">QACT: 8 B/такт + {da, Sa}</text>
+<path d="M75,1056 L75.0,446.2 Q75,441 80.2,441.0 L85.48,441.0" class="halo" style="stroke-width:9.2"/>
+<path d="M75,1056 L75.0,446.2 Q75,441 80.2,441.0 L85.48,441.0" class="ln" style="stroke:var(--quant);stroke-width:2.2"/>
+<polygon points="95,441 83.5,434.4 83.5,447.6" style="fill:var(--quant)"/>
+<text x="67" y="900" class="lb" style="fill:var(--quant)" text-anchor="middle" transform="rotate(-90 67 900)">чтение 8 FP32/такт (Q, Q2, Q3)</text>
+<path d="M380,455 L446.0,455.0 Q455,455 455.0,464.0 L455.0,996.0 Q455,1005 464.0,1005.0 L1011.0,1005.0 Q1020,1005 1020.0,996.0 L1020.0,699.2 Q1020,694 1025.2,694.0 L1030.48,694.0" class="halo" style="stroke-width:9.2"/>
+<path d="M380,455 L446.0,455.0 Q455,455 455.0,464.0 L455.0,996.0 Q455,1005 464.0,1005.0 L1011.0,1005.0 Q1020,1005 1020.0,996.0 L1020.0,699.2 Q1020,694 1025.2,694.0 L1030.48,694.0" class="ln" style="stroke:var(--quant);stroke-width:2.2"/>
+<polygon points="1040,694 1028.5,687.4 1028.5,700.6" style="fill:var(--quant)"/>
+<text x="1012" y="860" class="lb" style="fill:var(--quant)" text-anchor="middle" transform="rotate(-90 1012 860)">QST: K-строки и столбцы Vᵀ</text>
+<path d="M1290.48,830.0 L1285.2,830.0 Q1280,830 1280.0,835.2 L1280.0,1046.48" class="halo" style="stroke-width:9.2"/>
+<path d="M1290.48,830.0 L1285.2,830.0 Q1280,830 1280.0,835.2 L1280.0,1046.48" class="ln" style="stroke:var(--data);stroke-width:2.2"/>
+<polygon points="1280,1056 1286.6,1044.5 1273.4,1044.5" style="fill:var(--data)"/>
+<polygon points="1300,830 1288.5,823.4 1288.5,836.6" style="fill:var(--data)"/>
+<text x="1272" y="960" class="lb" style="fill:var(--data)" text-anchor="middle" transform="rotate(-90 1272 960)">8 слов/такт</text>
+<path d="M1435,856 L1435.0,881.92" class="halo" style="stroke-width:8.3"/>
+<path d="M1435,856 L1435.0,881.92" class="ln" style="stroke:var(--data);stroke-width:1.3;stroke-dasharray:2 4"/>
+<polygon points="1435,890 1440.6,879.9 1429.4,879.9" style="fill:var(--data)"/>
+<text x="1443" y="877" class="lb" style="fill:var(--data)" text-anchor="start">DSTEP / STREAM (минуя TMEM)</text>
+<path d="M1435.0,995.52 L1435.0,1046.48" class="halo" style="stroke-width:9.2"/>
+<path d="M1435.0,995.52 L1435.0,1046.48" class="ln" style="stroke:var(--vpu);stroke-width:2.2"/>
+<polygon points="1435,1056 1441.6,1044.5 1428.4,1044.5" style="fill:var(--vpu)"/>
+<polygon points="1435,986 1428.4,997.5 1441.6,997.5" style="fill:var(--vpu)"/>
+<text x="1443" y="1016" class="lb" style="fill:var(--vpu)" text-anchor="start">VA, VB; запись 8 слов/такт</text>
+<path d="M1983.56,270.0 L1986.8,270.0 Q1990,270 1990.0,273.2 L1990.0,1074.0 Q1990,1083 1981.0,1083.0 L1573.56,1083.0" class="halo" style="stroke-width:8.6"/>
+<path d="M1983.56,270.0 L1986.8,270.0 Q1990,270 1990.0,273.2 L1990.0,1074.0 Q1990,1083 1981.0,1083.0 L1573.56,1083.0" class="ln" style="stroke:var(--gray);stroke-width:1.6"/>
+<polygon points="1565,1083 1575.6,1088.9 1575.6,1077.1" style="fill:var(--gray)"/>
+<polygon points="1975,270 1985.6,275.9 1985.6,264.1" style="fill:var(--gray)"/>
+<text x="1780" y="1075" class="lb" style="fill:var(--gray)" text-anchor="middle">GATHER; RLD → R[rd]</text>
+<path d="M825.0,1120.16 L825.0,1185.84" class="halo" style="stroke-width:9.6"/>
+<path d="M825.0,1120.16 L825.0,1185.84" class="ln" style="stroke:var(--tmem);stroke-width:2.6"/>
+<polygon points="825,1196 832.1,1183.8 817.9,1183.8" style="fill:var(--tmem)"/>
+<polygon points="825,1110 817.9,1122.2 832.1,1122.2" style="fill:var(--tmem)"/>
+<text x="835" y="1158" class="lb" style="fill:var(--tmem)" text-anchor="start">гранты банков</text>
+<text x="1625" y="1130" class="tb" text-anchor="start">Обозначения</text>
+<path d="M1625,1156 L1663.88,1156.0" class="halo" style="stroke-width:10.2"/>
+<path d="M1625,1156 L1663.88,1156.0" class="ln" style="stroke:var(--data);stroke-width:3.2"/>
+<polygon points="1675,1156 1661.9,1148.2 1661.9,1163.8" style="fill:var(--data)"/>
+<text x="1685" y="1160" class="lb" text-anchor="start">128 B/такт (порт B, поток весов)</text>
+<path d="M1625,1180 L1665.48,1180.0" class="halo" style="stroke-width:9.2"/>
+<path d="M1625,1180 L1665.48,1180.0" class="ln" style="stroke:var(--data);stroke-width:2.2"/>
+<polygon points="1675,1180 1663.5,1173.4 1663.5,1186.6" style="fill:var(--data)"/>
+<text x="1685" y="1184" class="lb" text-anchor="start">8 слов FP32/такт (TMEM)</text>
+<path d="M1625,1204 L1666.76,1204.0" class="halo" style="stroke-width:8.4"/>
+<path d="M1625,1204 L1666.76,1204.0" class="ln" style="stroke:var(--data);stroke-width:1.4"/>
+<polygon points="1675,1204 1664.8,1198.3 1664.8,1209.7" style="fill:var(--data)"/>
+<text x="1685" y="1208" class="lb" text-anchor="start">≤ 32 B/такт, слова</text>
+<path d="M1625,1228 L1666.92,1228.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1625,1228 L1666.92,1228.0" class="ln" style="stroke:var(--seq);stroke-width:1.3;stroke-dasharray:7 5"/>
+<polygon points="1675,1228 1664.9,1222.4 1664.9,1233.6" style="fill:var(--seq)"/>
+<text x="1685" y="1232" class="lb" text-anchor="start">управление</text>
+<path d="M1625,1252 L1666.92,1252.0" class="halo" style="stroke-width:8.3"/>
+<path d="M1625,1252 L1666.92,1252.0" class="ln" style="stroke:var(--data);stroke-width:1.3;stroke-dasharray:2 4"/>
+<polygon points="1675,1252 1664.9,1246.4 1664.9,1257.6" style="fill:var(--data)"/>
+<text x="1685" y="1256" class="lb" text-anchor="start">обход / старое значение</text>
+<text x="1625" y="1282" class="lb" text-anchor="start">пересечение — разрыв в нижней линии</text>
+<text x="34" y="195" class="fl" text-anchor="start" style="fill:var(--frame)">otpu_slice</text>
+<text x="54" y="220" class="fl" text-anchor="start" style="fill:var(--seq)">SEQ — otpu_seq</text>
+<text x="484" y="405" class="fl" text-anchor="start" style="fill:var(--mxu)">MXU — otpu_mxu (2 команды в работе)</text>
+<text x="54" y="1050" class="fl" text-anchor="start" style="fill:var(--tmem)">TMEM — otpu_tmem</text>
+</svg>

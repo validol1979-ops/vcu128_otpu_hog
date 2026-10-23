@@ -1,9 +1,11 @@
 # openTPU (FeSens): копия RTL ядра и оболочки
 
-Файлы из `../external/rtl/opentpu-fesens/upstream`, коммит `f237dab`
-(2026-10-14), лицензия Apache-2.0 (`LICENSE`). Пути сохранены. Копия нужна,
-чтобы сборка из чистого клона не зависела от `external/`. Локальных правок
-нет: обновлять копированием из `external/` с правкой `UPSTREAM.json`.
+Файлы из `../external/rtl/opentpu-fesens/patched` = upstream, коммит `f237dab`
+(2026-10-14), плюс серия локальных патчей `patches/` (список и SHA256 — в
+`UPSTREAM.json`), лицензия Apache-2.0 (`LICENSE`). Пути сохранены. Копия нужна,
+чтобы сборка из чистого клона не зависела от `external/`. Здесь не править:
+обновлять только `../external/rtl/opentpu-fesens/scripts/sync_copy.sh
+vcu128_otpu/src/otpu-fesens`, сверка — `sync_copy.sh --check` (README библиотеки).
 
 - `rtl/top, mxu, vpu, mem, seq, dma` — ядро (без ячеек производителя);
 - `rtl/shell` — общая оболочка FPGA-плат upstream (`otpu_board`,
@@ -11,8 +13,8 @@
 - `rtl/tech/xilinxus` — ячейки DSP48E2 (UltraScale+), `rtl/tech/generic` —
   поведенческие (RAM, симуляция);
 - `rtl/boards/bcu1525/otpu_bcu_sys.sv` — `otpu_board` и `otpu_mem_ch` на каждый канал с
-  выведенными портами хоста (`x_*`) и контроллера (`c_*`): используется без
-  изменений, плата отличается только топом;
+  выведенными портами хоста (`x_*`) и контроллера (`c_*`); патч 0001 — параметр `ARD`
+  (кредиты чтения `otpu_mem_ch`), плата отличается только топом;
 - `boards/ypcb-00338/constraints/otpu_mem_ch.tcl`, `otpu_clk2x.tcl` —
   ограничения CDC, которые upstream применяет и на BCU1525.
 

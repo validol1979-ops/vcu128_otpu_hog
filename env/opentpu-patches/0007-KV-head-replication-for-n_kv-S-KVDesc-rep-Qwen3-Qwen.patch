@@ -1,0 +1,465 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 12:32:08 +0300
+Subject: [PATCH 7/8] KV-head replication for n_kv < S (KVDesc rep): Qwen3 /
+ Qwen3.5 / LFM2 at S > n_kv
+
+When S % n_kv == 0 and n_q % S == 0, each slice takes n_q / S consecutive query heads and KV head
+sid // rep, rep = S / n_kv; replicas compute their K/V redundantly (bit-identical caches).
+compiler.KVDesc rep (owned_heads -> sid // rep), kernels/layouts.head_parallel_attention_weights (per-slice
+q / k / v, K/V rows duplicated), attention G_loc, Spec.check relaxed in qwen3 / qwen35 / lfm2, images and
+descriptors one KV head per slice when replicated; tiled / runtime paths. Existing layouts unchanged
+(56 image / program / logit / DRAM comparisons = baseline). Tests: S = 4 / n_kv 2 and S = 2 / n_kv 1 tiny
+Qwen3 / Qwen3.5 on the ISA (emulation, resident == per-position, byte-identical KV replicas);
+test_config_matrix 39 passed (with patches 0005, 0006); Qwen3 / Qwen3.5 / kernels 176 passed, 14 skipped.
+Enables Qwen3.5-2B (n_kv 2) at S = 4. Codex gpt-6-astra (high), reviewed.
+
+diff --git a/opentpu/compiler.py b/opentpu/compiler.py
+index bdecfca2..4d046b40 100644
+--- a/opentpu/compiler.py
++++ b/opentpu/compiler.py
+@@ -409,7 +409,10 @@ def k_scale_bytes(d: int, D: int) -> int:
+ 
+ 
+ class KVDesc:
+-    """Per-slice view of a KV cache whose heads are dealt round-robin over slices.
++    """Per-slice KV cache: round-robin heads, or one head per `rep` consecutive slices.
++
++    rep is S // n_kv_heads when S > n_kv_heads, else 1. Replicas use the same global head
++    key sid // rep and hold separate, identically computed cache regions.
+ 
+     Layout per head: K token-major int8 [cap, d] + a scale row per token (k_scale_bytes: its
+     fp32 scale at d = D, else an int8 scale row); V^T dim-major int8
+@@ -421,11 +424,14 @@ class KVDesc:
+     """
+ 
+     def __init__(self, heads: dict, cap: int, d: int, D: int, S: int, sid: int,
+-                 dv: int | None = None):
++                 dv: int | None = None, rep: int = 1):
+         self.heads, self.cap, self.d, self.D, self.S, self.sid = heads, cap, d, D, S, sid
+         self.dv = d if dv is None else dv
++        self.rep = rep
+ 
+     def owned_heads(self, n_kv_heads: int):
++        if self.rep > 1:
++            return builtins.range(self.sid // self.rep, self.sid // self.rep + 1)
+         return builtins.range(self.sid, n_kv_heads, self.S)
+ 
+     def _h(self, h: int) -> dict:
+diff --git a/opentpu/kernels/attention.py b/opentpu/kernels/attention.py
+index 1de2eeec..33b42c49 100644
+--- a/opentpu/kernels/attention.py
++++ b/opentpu/kernels/attention.py
+@@ -292,15 +292,18 @@ def _attend_heads(qhs, kv, hs, seq_len: int, block: int, scale: float | None = N
+ def attention_decode(q, kv, out, n_q_heads, n_kv_heads, seq_len, block):
+     """out[h*G+g] = softmax(q K_h^T / sqrt(d)) V_h for the KV heads owned by this slice.
+ 
+-    q: Input [Hq, d]; kv: KVCache (heads round-robin over slices); out: Output [Hq, d].
++    q: Input [Hq, d]; kv: KVCache (heads round-robin or replicated); out: Output [Hq, d].
+     """
+-    G = n_q_heads // n_kv_heads
++    G = n_q_heads // n_kv_heads // kv.rep
++    if kv.rep > 1 and n_q_heads % kv.S:
++        raise ValueError("query heads must be a multiple of the slice count")
+     scale = ol.LOG2E / math.sqrt(kv.d)
+     for h in kv.owned_heads(n_kv_heads):
+-        acc, l = _attend(ol.load(q[h * G:(h + 1) * G, :]), kv, h, seq_len, block, scale, raw=True)
++        q0 = kv.sid * G if kv.rep > 1 else h * G
++        acc, l = _attend(ol.load(q[q0:q0 + G, :]), kv, h, seq_len, block, scale, raw=True)
+         inv = ol.recip(l)
+         for g in ol.static_range(G):     # row by row: the DMA stores row g while the VPU scales g+1
+-            ol.store(out[h * G + g:h * G + g + 1, :], acc[g:g + 1, :] * inv[g:g + 1][:, None])
++            ol.store(out[q0 + g:q0 + g + 1, :], acc[g:g + 1, :] * inv[g:g + 1][:, None])
+ 
+ 
+ @ol.jit
+@@ -316,7 +319,7 @@ def attention_layer(h, gamma, wq, wk, wv, wo, cos, sin, kv, out,
+     """
+     S = ol.num_programs()
+     d = kv.d
+-    G = n_q_heads // n_kv_heads
++    G = n_q_heads // n_kv_heads // kv.rep
+     x = ol.load(h)
+     xs = ol.quantize(rmsnorm(x, ol.load(gamma), eps))
+     q = ol.dot(xs, wq)                          # [1, Hkv_loc*G*d]
+diff --git a/opentpu/kernels/layouts.py b/opentpu/kernels/layouts.py
+index b956420b..74a3c230 100644
+--- a/opentpu/kernels/layouts.py
++++ b/opentpu/kernels/layouts.py
+@@ -5,12 +5,19 @@ import numpy as np
+ def head_parallel_attention_weights(wq, wk, wv, wo, n_q_heads, n_kv_heads, d, S):
+     """Reorder attention weights so that the contiguous row shard of slice s holds the heads
+     that slice owns (KV heads s, s+S, ... and their query groups), and the columns of wo follow
+-    the slice-major order in which `attention_layer` all-gathers the head outputs."""
++    the slice-major order in which `attention_layer` all-gathers the head outputs. When
++    S > n_kv_heads, consecutive slices replicate a KV head and split its query group."""
+     G = n_q_heads // n_kv_heads
+-    if n_kv_heads % S:
+-        raise ValueError("n_kv_heads must be a multiple of the slice count")
+-    kv_order = [h for s in range(S) for h in range(s, n_kv_heads, S)]
+-    q_order = [h * G + g for h in kv_order for g in range(G)]
++    if n_kv_heads % S == 0:
++        kv_order = [h for s in range(S) for h in range(s, n_kv_heads, S)]
++        q_order = [h * G + g for h in kv_order for g in range(G)]
++    elif S % n_kv_heads == 0 and n_q_heads % S == 0:
++        rep = S // n_kv_heads
++        kv_order = [s // rep for s in range(S)]
++        q_order = list(range(n_q_heads))
++    else:
++        raise ValueError("KV heads must divide the slice count with query heads divisible by "
++                         "slices, or be a multiple of the slice count")
+     qrows = np.concatenate([np.arange(h * d, (h + 1) * d) for h in q_order])
+     kvrows = np.concatenate([np.arange(h * d, (h + 1) * d) for h in kv_order])
+     return wq[qrows], wk[kvrows], wv[kvrows], wo[:, qrows]
+diff --git a/opentpu/llm/lfm2.py b/opentpu/llm/lfm2.py
+index f9f87cf9..e0158d12 100644
+--- a/opentpu/llm/lfm2.py
++++ b/opentpu/llm/lfm2.py
+@@ -154,9 +154,10 @@ class Spec:
+                 (self.n_q * self.head_dim % D == 0, "n_q * head_dim % D"),
+                 (self.hidden % (S * D) == 0, f"hidden {self.hidden} % S*D"),
+                 (self.ffn % (S * D) == 0, f"ffn {self.ffn} % S*D"),
+-                (self.n_kv % S == 0, f"n_kv {self.n_kv} % S"),
++                (self.n_kv % S == 0 or (S % self.n_kv == 0 and self.n_q % S == 0),
++                 f"n_kv {self.n_kv} and n_q {self.n_q} cannot shard over S {S}"),
+                 (self.n_q % self.n_kv == 0, "n_q % n_kv"),
+-                (self.n_q // self.n_kv <= cfg.MCOLS, "query group larger than MXU columns"),
++                (self.n_q // max(self.n_kv, S) <= cfg.MCOLS, "query group larger than MXU columns"),
+                 (self.vocab % S == 0, f"vocab {self.vocab} % S"),
+                 (max(self.ffn, self.n_q * self.head_dim, self.hidden) <= cfg.ACT_BLOCKS * D,
+                  "an inner dimension exceeds ACT RAM")]
+@@ -451,7 +452,8 @@ class Image(EmbedHost):
+         rb = lambda k, f: Q.row_bytes(k, f, D)                          # noqa: E731
+         self.spec, self.cfg, self.cap, self.batch, self.rows = spec, cfg, cap, 1, rows
+         self.dk = -(-d // D) * D                        # cached K row / query width
+-        self.nq_loc, self.nkv_loc = spec.n_q // S, spec.n_kv // S
++        self.rep = S // spec.n_kv if S > spec.n_kv else 1
++        self.nq_loc, self.nkv_loc = spec.n_q // S, max(1, spec.n_kv // S)
+         self.h_loc, self.f_loc, self.v_loc = H // S, F_ // S, spec.vocab // S
+         mo = spec.moe
+         b = _Bump()
+@@ -798,9 +800,9 @@ class Image(EmbedHost):
+             else:
+                 ns.qn = Tensor(off + lofs["qn"], (d,), (1,))
+                 ns.kn = Tensor(off + lofs["kn"], (d,), (1,))
+-                ns.kv = KVDesc({sid + j * cfg.S: {k: off + v for k, v in r.items()}
++                ns.kv = KVDesc({sid // self.rep + j * cfg.S: {k: off + v for k, v in r.items()}
+                                 for j, r in enumerate(lofs["kv"])}, self.cap, self.dk, D, cfg.S,
+-                               sid, dv=d)
++                               sid, dv=d, rep=self.rep)
+                 ns.kvs = [ns.kv]
+             return ns
+ 
+diff --git a/opentpu/llm/qwen3.py b/opentpu/llm/qwen3.py
+index 9a736956..2a5bbe1e 100644
+--- a/opentpu/llm/qwen3.py
++++ b/opentpu/llm/qwen3.py
+@@ -118,9 +118,10 @@ class Spec:
+         need = [(self.head_dim % D == 0, f"head_dim {self.head_dim} % D {D}"),
+                 (self.hidden % (S * D) == 0, f"hidden {self.hidden} % S*D"),
+                 (self.ffn % (S * D) == 0, f"ffn {self.ffn} % S*D"),
+-                (self.n_kv % S == 0, f"n_kv {self.n_kv} % S"),
++                (self.n_kv % S == 0 or (S % self.n_kv == 0 and self.n_q % S == 0),
++                 f"n_kv {self.n_kv} and n_q {self.n_q} cannot shard over S {S}"),
+                 (self.n_q % self.n_kv == 0, "n_q % n_kv"),
+-                (self.n_q // self.n_kv <= cfg.MCOLS, "query group larger than MXU columns"),
++                (self.n_q // max(self.n_kv, S) <= cfg.MCOLS, "query group larger than MXU columns"),
+                 (self.vocab % S == 0, f"vocab {self.vocab} % S"),
+                 (max(self.ffn, self.n_q * self.head_dim, self.hidden) <= cfg.ACT_BLOCKS * D,
+                  "an inner dimension exceeds ACT RAM")]
+@@ -929,7 +930,8 @@ class Image(EmbedHost):
+         self.formats = _formats(spec, formats)
+         rb = lambda k, f: Q.row_bytes(k, f, D)                          # noqa: E731
+         self.batch, self.rows = batch, rows
+-        self.nq_loc, self.nkv_loc = spec.n_q // S, spec.n_kv // S
++        self.rep = S // spec.n_kv if S > spec.n_kv else 1
++        self.nq_loc, self.nkv_loc = spec.n_q // S, max(1, spec.n_kv // S)
+         self.h_loc, self.f_loc, self.v_loc = H // S, F_ // S, spec.vocab // S
+         b = _Bump()
+         R = rows
+@@ -1162,8 +1164,9 @@ class Image(EmbedHost):
+                           for da, sa in lofs["wd"])
+             ns.wd = QTensor(parts[0].data, parts[0].scale, (n, spec.ffn), parts[0].rs,
+                             parts[0].srs, D, parts=parts, pw=C, wf=parts[0].wf)
+-            ns.kvs = [KVDesc({sid + j * cfg.S: {k: off + v for k, v in r.items()}
+-                              for j, r in enumerate(heads)}, self.cap, d, D, cfg.S, sid)
++            ns.kvs = [KVDesc({sid // self.rep + j * cfg.S: {k: off + v for k, v in r.items()}
++                              for j, r in enumerate(heads)}, self.cap, d, D, cfg.S, sid,
++                              rep=self.rep)
+                       for heads in lofs["kvs"]]
+             ns.kv = ns.kvs[0]
+             return ns
+@@ -1316,10 +1319,11 @@ def _attention(x, lw, c, s_, pos: int, spec: Spec, block: int, gated: bool = Fal
+     queries in program order so that the sequencer's window, which the appends fill, never
+     holds the MXU's next MM back.
+ 
++    G is the local query group: replicas split a KV head's queries into consecutive groups.
+     A query group of more heads than the MXU has columns attends in parts of MCOLS heads, each
+     streaming the KV head again. `gated` (Qwen3.5): lw.wgate projects a gate per query
+     dimension, and the attention output is multiplied by sigmoid(gate) before W_o."""
+-    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv, spec.eps
++    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv // lw.kv.rep, spec.eps
+     kv = lw.kv
+     kpos = pos.pos if isinstance(pos, RunPos) else pos
+     xs = ol.quantize(rmsnorm(x, ol.load(lw.g_in), eps))
+@@ -1744,7 +1748,7 @@ def _attention_rows(x, lw, c, s_, rows, spec, block: int, gated: bool = False,
+     be a run-time one (RunPos.offset: a layer-major prefill run), its K / V appended row by row.
+     kv_only: the rows' K / V appended, nothing else (no queries, no output: None; the MTP
+     layer's prompt rows in a layer-major prefill, qwen35.qwen35_mtp_kv_run)."""
+-    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv, spec.eps
++    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv // lw.kv.rep, spec.eps
+     R = rows.R if isinstance(rows, RunRows) else len(rows)
+     xs = ol.quantize(rmsnorm(x, ol.load(lw.g_in), eps))
+     k = ol.dot(xs, lw.wk)                       # [R, nkv_loc*d]
+diff --git a/opentpu/llm/qwen35.py b/opentpu/llm/qwen35.py
+index 1ed48136..5c225f5b 100644
+--- a/opentpu/llm/qwen35.py
++++ b/opentpu/llm/qwen35.py
+@@ -195,7 +195,8 @@ class Spec:
+                 (self.lin_heads % self.lin_nk == 0, "DeltaNet value heads % key heads"),
+                 (self.hidden % (S * D) == 0, f"hidden {self.hidden} % S*D"),
+                 (self.ffn % (S * D) == 0, f"ffn {self.ffn} % S*D"),
+-                (self.n_kv % S == 0, f"n_kv {self.n_kv} % S"),
++                (self.n_kv % S == 0 or (S % self.n_kv == 0 and self.n_q % S == 0),
++                 f"n_kv {self.n_kv} and n_q {self.n_q} cannot shard over S {S}"),
+                 (self.n_q % self.n_kv == 0, "n_q % n_kv"),
+                 (self.vocab % S == 0, f"vocab {self.vocab} % S"),
+                 (max(self.ffn, self.n_q * self.head_dim, self.hidden) <= cfg.ACT_BLOCKS * D,
+@@ -704,7 +705,8 @@ class Image(EmbedHost):
+         rb = lambda k, f: Q.row_bytes(k, f, D)                          # noqa: E731
+         dk, dv = spec.lin_dk, spec.lin_dv
+         self.spec, self.cfg, self.cap, self.batch, self.rows = spec, cfg, cap, 1, rows
+-        self.nq_loc, self.nkv_loc = spec.n_q // S, spec.n_kv // S
++        self.rep = S // spec.n_kv if S > spec.n_kv else 1
++        self.nq_loc, self.nkv_loc = spec.n_q // S, max(1, spec.n_kv // S)
+         self.h_loc, self.f_loc, self.v_loc = H // S, F_ // S, spec.vocab // S
+         self.nl = spec.lin_heads // S                   # DeltaNet heads of one slice
+         self.C = 2 * dk + dv                            # convolved channels per head (q, k, v)
+@@ -1395,8 +1397,9 @@ class Image(EmbedHost):
+             else:
+                 ns.qn = Tensor(off + lofs["qn"], (d,), (1,))
+                 ns.kn = Tensor(off + lofs["kn"], (d,), (1,))
+-                ns.kv = KVDesc({sid + j * cfg.S: {k: off + v for k, v in r.items()}
+-                                for j, r in enumerate(lofs["kv"])}, self.cap, d, D, cfg.S, sid)
++                ns.kv = KVDesc({sid // self.rep + j * cfg.S: {k: off + v for k, v in r.items()}
++                                for j, r in enumerate(lofs["kv"])}, self.cap, d, D, cfg.S, sid,
++                               rep=self.rep)
+                 ns.kvs = [ns.kv]
+             return ns
+ 
+diff --git a/opentpu/llm/tiled.py b/opentpu/llm/tiled.py
+index 2d0634a8..1c842dc0 100644
+--- a/opentpu/llm/tiled.py
++++ b/opentpu/llm/tiled.py
+@@ -174,7 +174,7 @@ def _attention_tile(res: Res, lw, c, s_, pos, T: int, spec, block: int, parts: i
+     I/O scratch, _oscr) as it ends and loaded back whole once the heads are done, or without
+     oscr gathered in TMEM; else each part's quantized as it ends (quantize_into: a QACT range
+     of its own, an MM of W_o's a range, docs/isa.md MM; not the same bits)."""
+-    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv, spec.eps
++    d, G, eps = spec.head_dim, spec.n_q // spec.n_kv // lw.kv.rep, spec.eps
+     D = ol.block_size()
+     dk = -(-d // D) * D
+     run = isinstance(pos, RunRows)
+diff --git a/opentpu/runtime.py b/opentpu/runtime.py
+index 74c4d19e..6e7d1256 100644
+--- a/opentpu/runtime.py
++++ b/opentpu/runtime.py
+@@ -6,7 +6,7 @@ Host arguments:
+                       fmt="int4" | "fp4"), optionally sharded
+                       over slices by rows (shard=0) or columns (shard=1) -> QTensor
+   Output(shape)       fp32 result; the kernel `store`s into it          -> Tensor
+-  KVCache(k, v, cap)  [Hkv, T, d] K/V, quantized, heads round-robin over slices -> KVDesc
++  KVCache(k, v, cap)  [Hkv, T, d] K/V, quantized, heads round-robin or replicated -> KVDesc
+ Anything else (ints, floats) is passed to the kernel unchanged (compile-time constants).
+ """
+ from __future__ import annotations
+@@ -151,7 +151,11 @@ def place(cfg: Config, args: dict) -> tuple[_Dram, Layout, list]:
+             cap, d = a.cap, a.d
+             if cap % 4:
+                 raise ValueError("KV capacity must be a multiple of 4")
+-            per_slice = [[h for h in range(a.H) if h % S == s] for s in range(S)]
++            rep = S // a.H if S > a.H else 1
++            if S > a.H and S % a.H:
++                raise ValueError("KV heads must divide the slice count for replication")
++            per_slice = ([[s // rep] for s in range(S)] if rep > 1 else
++                         [[h for h in range(a.H) if h % S == s] for s in range(S)])
+             nloc = max(len(p) for p in per_slice)
+             regions = []
+             ksb = k_scale_bytes(d, D)
+@@ -179,7 +183,7 @@ def place(cfg: Config, args: dict) -> tuple[_Dram, Layout, list]:
+                     dram.put(s, r["vs"], vsf)
+             layout.params[name] = (a, heads)
+             for s in range(S):
+-                bound[s][name] = KVDesc(heads[s], cap, d, D, S, s)
++                bound[s][name] = KVDesc(heads[s], cap, d, D, S, s, rep=rep)
+         else:
+             for s in range(S):
+                 bound[s][name] = a
+diff --git a/tests/test_kernels.py b/tests/test_kernels.py
+index 29bf3c5a..4b653eae 100644
+--- a/tests/test_kernels.py
++++ b/tests/test_kernels.py
+@@ -67,7 +67,8 @@ def test_attention_decode(S, T, block):
+     assert rel(got, want) < 0.03
+ 
+ 
+-@pytest.mark.parametrize("S,Hq,Hkv", [(1, 2, 1), (1, 4, 4), (2, 4, 4), (4, 8, 4)])
++@pytest.mark.parametrize("S,Hq,Hkv", [(1, 2, 1), (1, 4, 4), (2, 4, 4), (4, 8, 4),
++                                      (4, 8, 2), (2, 4, 1), (4, 8, 1)])
+ def test_attention_decode_head_layouts(S, Hq, Hkv):
+     args, want = attn_args(np.random.default_rng(7), Hq=Hq, Hkv=Hkv, T=70)
+     got = launch(attention_decode, Config(S=S), **args).outputs["out"]
+@@ -84,6 +85,15 @@ def test_attention_layer(S, pos):
+     assert rel(K[:, pos], knew) < 0.02 and rel(V[:, pos], vnew) < 0.02
+ 
+ 
++@pytest.mark.parametrize("S,Hkv", [(4, 2), (2, 1), (4, 1)])
++def test_attention_layer_replicated_kv(S, Hkv):
++    args, (want, knew, vnew) = layer_args(np.random.default_rng(7), S, Hq=8, Hkv=Hkv)
++    r = launch(attention_layer, Config(S=S), **args)
++    assert rel(r.outputs["out"], want) < 0.0125
++    K, V = r.kv("kv")
++    assert rel(K[:, 40], knew) < 0.02 and rel(V[:, 40], vnew) < 0.02
++
++
+ def test_design_size_block_128():
+     """The design configuration: D = 128 (= head dim), 128-token blocks."""
+     args, want = attn_args(np.random.default_rng(5), Hq=6, Hkv=1, d=128, T=300, cap=384,
+diff --git a/tests/test_qwen3.py b/tests/test_qwen3.py
+index 6c7fcb5a..da7167e4 100644
+--- a/tests/test_qwen3.py
++++ b/tests/test_qwen3.py
+@@ -19,11 +19,10 @@ def _cos(a, b):
+     return (a * b).sum(-1) / np.linalg.norm(a, axis=-1) / np.linalg.norm(b, axis=-1)
+ 
+ 
+-@pytest.fixture(scope="module")
+-def tiny():
++def _tiny_model(hidden=256, n_q=4, n_kv=2):
+     torch.manual_seed(0)
+-    hc = transformers.Qwen3Config(hidden_size=256, num_hidden_layers=2, num_attention_heads=4,
+-                                  num_key_value_heads=2, head_dim=128, intermediate_size=512,
++    hc = transformers.Qwen3Config(hidden_size=hidden, num_hidden_layers=2, num_attention_heads=n_q,
++                                  num_key_value_heads=n_kv, head_dim=128, intermediate_size=512,
+                                   vocab_size=1000, rms_norm_eps=1e-6, rope_theta=1e6,
+                                   tie_word_embeddings=True, max_position_embeddings=4096)
+     m = transformers.Qwen3ForCausalLM(hc).float().eval()
+@@ -32,7 +31,56 @@ def tiny():
+             if "norm" in n:
+                 p.copy_(1 + 0.1 * torch.randn_like(p))
+     W = {k: v.float().numpy() for k, v in m.state_dict().items()}
+-    return m, W, Spec(256, 2, 4, 2, 128, 512, 1000)
++    return m, W, Spec(hidden, 2, n_q, n_kv, 128, 512, 1000)
++
++
++@pytest.fixture(scope="module")
++def tiny():
++    return _tiny_model()
++
++
++def _assert_kv_replicas(eng):
++    """Every replica's complete K, K scales, V^T and V scales agree byte for byte."""
++    from opentpu.compiler import Affine, k_scale_bytes
++    img, spec = eng.image, eng.spec
++    assert img.rep == 2 and img.nkv_loc == 1
++    for s in range(eng.cfg.S):
++        for li in range(spec.layers):
++            lw = img.descriptors(s).layer(li)
++            if not hasattr(lw, "kv"):
++                continue
++            kv = lw.kv
++            assert kv.rep == 2 and list(kv.owned_heads(spec.n_kv)) == [s // 2]
++            assert list(kv.heads) == [s // 2]
++            peer = img.descriptors(s ^ 1).layer(li).kv
++            for name, size in (("k", kv.cap * kv.d),
++                               ("ks", kv.cap * k_scale_bytes(kv.d, kv.D)),
++                               ("vt", kv.d * kv.cap), ("vs", 4 * kv.cap)):
++                a = Affine.of(kv.heads[s // 2][name]).static()
++                b = Affine.of(peer.heads[s // 2][name]).static()
++                assert np.array_equal(eng.backend.read(s, a, size),
++                                      eng.backend.read(s ^ 1, b, size)), (li, s, name)
++
++
++@pytest.mark.parametrize("S,n_kv", [(4, 2), (2, 1)])
++def test_tiny_replicated_kv_heads(S, n_kv):
++    """Consecutive slices share one KV head and split its queries: emulation accuracy,
++    resident and prefill logits equal per-position decode, and KV replicas stay identical."""
++    _, W, spec = _tiny_model(hidden=S * 128, n_q=2 * S, n_kv=n_kv)
++    cfg = device_config(spec, 256, S=S, MCOLS=2, lookup=True, rows=8)
++    a = Engine(spec, W, cap=256, cfg=cfg, resident=True)
++    b = Engine(spec, W, cap=256, cfg=cfg)
++    toks = [int(t) for t in np.random.default_rng(6).integers(0, 1000, 12)]
++    dev = np.array([b.step(t) for t in toks])
++    assert _cos(dev, emulated_logits(spec, W, toks, S=S)).min() > 0.9995
++    assert a.resident
++    for t, want in zip(toks[:3], dev[:3]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    assert np.array_equal(a.prefill(toks[3:9], chunk=4).view(np.uint32), dev[8].view(np.uint32))
++    for t, want in zip(toks[9:], dev[9:]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    _assert_kv_replicas(a)
++    _assert_kv_replicas(b)
+ 
+ 
+ def test_the_embedding_table_goes_to_the_host_when_it_does_not_fit(tiny):
+diff --git a/tests/test_qwen35.py b/tests/test_qwen35.py
+index a6460973..6c06bb29 100644
+--- a/tests/test_qwen35.py
++++ b/tests/test_qwen35.py
+@@ -32,14 +32,14 @@ def _chat_ids(tok, text):
+     return list(ids["input_ids"] if hasattr(ids, "keys") else ids)
+ 
+ 
+-def _tiny_model(nk: int, nv: int = 8, init: float = 0.02):
++def _tiny_model(nk: int, nv: int = 8, init: float = 0.02, *, hidden=256, n_kv=2):
+     """A random tiny Qwen3.5 (HF model, weights, Spec) with nv DeltaNet value heads, nk key
+     heads. init: the initializer range (0.2: tokens that vary; at 0.02 the tied head mostly
+     gives back the input token)."""
+     torch.manual_seed(0)
+     hc = transformers.Qwen3_5TextConfig(
+-        hidden_size=256, num_hidden_layers=len(KINDS), num_attention_heads=8,
+-        num_key_value_heads=2, head_dim=256, intermediate_size=512, vocab_size=1000,
++        hidden_size=hidden, num_hidden_layers=len(KINDS), num_attention_heads=8,
++        num_key_value_heads=n_kv, head_dim=256, intermediate_size=512, vocab_size=1000,
+         layer_types=["full_attention" if k == "attn" else "linear_attention" for k in KINDS],
+         linear_num_key_heads=nk, linear_num_value_heads=nv, linear_key_head_dim=128,
+         linear_value_head_dim=128, linear_conv_kernel_dim=4, tie_word_embeddings=True,
+@@ -52,7 +52,7 @@ def _tiny_model(nk: int, nv: int = 8, init: float = 0.02):
+                 p.copy_((1.0 if n.endswith("linear_attn.norm.weight") else 0.0)
+                         + 0.1 * torch.randn_like(p))
+     W = {k: v.float().numpy() for k, v in m.state_dict().items()}
+-    return m, W, Spec(256, KINDS, 8, 2, 256, 64, nv, 128, 128, 512, 1000, lin_kheads=nk)
++    return m, W, Spec(hidden, KINDS, 8, n_kv, 256, 64, nv, 128, 128, 512, 1000, lin_kheads=nk)
+ 
+ 
+ @pytest.fixture(scope="module", params=[8, 4], ids=["kh8", "kh4"])
+@@ -63,6 +63,29 @@ def tiny(request):
+     return _tiny_model(request.param)
+ 
+ 
++@pytest.mark.parametrize("S,n_kv", [(4, 2), (2, 1)])
++def test_tiny_replicated_kv_heads(S, n_kv):
++    """Hybrid layers with replicated attention KV heads: the local query gates and partial
++    RoPE follow emulation; resident/prefill decode and the cache replicas are bit exact."""
++    from opentpu.llm.qwen3 import device_config
++    from test_qwen3 import _assert_kv_replicas
++    _, W, spec = _tiny_model(4, hidden=S * 128, n_kv=n_kv)
++    cfg = device_config(spec, 256, S=S, MCOLS=2, lookup=True, rows=8)
++    a = Engine(spec, W, cap=256, cfg=cfg, resident=True)
++    b = Engine(spec, W, cap=256, cfg=cfg)
++    toks = [int(t) for t in np.random.default_rng(6).integers(0, 1000, 12)]
++    dev = np.array([b.step(t) for t in toks])
++    assert _cos(dev, emulated_logits(spec, W, toks, S=S)).min() > 0.999
++    assert a.resident
++    for t, want in zip(toks[:5], dev[:5]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    assert np.array_equal(a.prefill(toks[5:9], chunk=4).view(np.uint32), dev[8].view(np.uint32))
++    for t, want in zip(toks[9:], dev[9:]):
++        assert np.array_equal(a.step(t).view(np.uint32), want.view(np.uint32))
++    _assert_kv_replicas(a)
++    _assert_kv_replicas(b)
++
++
+ def test_from_hf_refuses_a_rope_scaling(tmp_path):
+     """Spec.from_hf refuses a RoPE type other than the default (mRoPE's sections are 1-D RoPE
+     for text): Hugging Face's YaRN rescales the frequencies and cos / sin."""

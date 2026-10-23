@@ -25,21 +25,20 @@ DMA (данные): канал `j` (= 2s + c, слайс s, его канал c)
 | Адрес | Что |
 |---|---|
 | 0x00000 | `otpu_board` s_ctl (12 бит адреса; карта upstream `docs/observability.md`) |
-| 0x30000 | SYSMON (температура, напряжения) — этап 2, до этого чтение 0 |
-| 0x40000 | регистры HBM/платформы этого проекта (`otpu_hbm_regs`): калибровка, температура HBM, счётчики портов |
+| 0x30000 | не занят (DECERR); SYSMON — в окне 0x40000, см. «Температура и контроль» |
+| 0x40000 | регистры платформы (`vcu128_platform_regs`): HBM, 40G, QSFP1; 0x20…0x5C — термоконтроль (`vcu128_thermal`) |
 | 0x50000 | регистры 40G (`eth40_regs`): link, счётчики MAC/протокола, MAC/IP |
 
 ## Тактирование
 
 | Такт | Источник | Частота | Домены |
 |---|---|---|---|
-| core_clk | default_100mhz_clk (BH51/BJ51) → MMCM | 100 МГц (этап 2: до 200) | `otpu_board`, native-сторона `otpu_mem_ch`, s_ctl |
+| core_clk | QDR4_CLK_100MHZ (BJ4/BK3) → MMCM, VCO 900 / 4,5 (дробный делитель CLKOUT0) | 200 МГц (до 9e55549 — 100, до 0d4b15d — 150) | `otpu_board`, native-сторона `otpu_mem_ch`, s_ctl, регистры, `eth40_mgmt`, s_axi l_ethernet |
 | core_clk2x | тот же MMCM | 2 × core_clk | TMEM_PMP = 1 (если включено) |
-| uclk | MMCM от 100 МГц HBM | 225 МГц | сторона контроллера `otpu_mem_ch`, `otpu_hbm_port`, AXI-порты HBM |
+| uclk | тот же MMCM, 900 / 4 | 225 МГц | сторона контроллера `otpu_mem_ch`, `otpu_hbm_port`, AXI-порты HBM |
 | hbm_ref | 100 МГц SiTime (HBM/DDR4 component clock) | 100 МГц | HBM_REF_CLK IP |
-| apb | core_clk | 100 МГц | APB HBM (калибровка) |
-| eth_clk | l_ethernet tx_clk_out (QSFP1, квад 135, Si570 156,25 МГц) | 156,25 МГц (40G, 256 бит) | `eth40`, `otpu_eth_bridge`, xclk-сторона `otpu_mem_ch` |
-| dclk | core_clk | 100 МГц | DRP/init l_ethernet |
+| clk100 | тот же MMCM, 900 / 9 | 100 МГц | APB HBM (калибровка; IP настроен на 100 МГц), dclk и DRP l_ethernet (GT_DRP_CLK = 100) |
+| eth_clk | l_ethernet tx_clk_out (QSFP1, квад 135, Si570 156,25 МГц) | 312,5 МГц (40G; период 3,200 нс по clocks.rpt, опора Si570 156,25 МГц) | `eth40`, `otpu_eth_bridge`, xclk-сторона `otpu_mem_ch` |
 
 Переходы: native ↔ uclk ↔ xclk — внутри `otpu_mem_ch` (upstream);
 AXI-Lite eth_clk → core_clk — асинхронный мост (verilog-axi `axil_cdc`).
@@ -63,7 +62,13 @@ AXI-Lite eth_clk → core_clk — асинхронный мост (verilog-axi `
 - частичных записей `otpu_mem_ch` не выдаёт (делает RMW сам), но `c_wdata_we`
   передаётся в WSTRB.
 
-Сторона HBM: на каждый порт свой AXI3-порт HBM IP (256 бит, uclk), beat =
+Сторона HBM: на каждый порт — NS = 2 AXI3-порта HBM IP (256 бит, uclk; подпорт
+выбирается старшим битом номера псевдоканала beat), т. е. четыре порта на канал:
+канал `j` — `AXI_(8j + 4k + p)`, порты 00 01 04 05 (канал 0), 08 09 12 13 (канал 1),
+16 17 20 21 и 24 25 28 29 (каналы 2, 3 при S = 2; при S = 1 включены в IP и заглушены).
+Каждый AXI-порт обращается только к псевдоканалам своего мини-коммутатора — без
+боковых переходов коммутатора HBM (`src/hbm/README.md`, «Подпорты»). Native-порт
+принимает до 64 байт за такт uclk (одна команда `otpu_mem_ch`), AXI-порт — 32. Beat =
 пакет из двух 256-битных слов. Канал `j` занимает 2 GiB глобального
 адресного пространства HBM (`j × 2 GiB`); при S = 4 — все 8 ГБ. Внутри
 канала адреса перемешиваются по псевдоканалам (хеш) так, чтобы поток по
@@ -89,3 +94,120 @@ AXI-Lite eth_clk → core_clk — асинхронный мост (verilog-axi `
   (`(reg & mask) == val` с таймаутом — заменяет циклы опроса хоста).
 - Цель по скорости: запись в HBM ≥ 2 ГБ/с, чтение ≥ 2 ГБ/с с ПК на Python
   (крупные кадры, окно из многих пакетов в полёте).
+
+## Температура и контроль
+
+Исходники: `src/thermal/` (`vcu128_sysmon`, `vcu128_sysmon_drp`, `vcu128_thermal`,
+`vcu128_ctl_guard`), регистры — в `vcu128_platform_regs` (окно 0x40000), ограничения —
+`constr/vcu128_thermal.tcl`, тест — `sim/thermal/run.sh`, хост — `tools/otpu_temp.py`
+(40G) и `tools/jtag/thermal.tcl` (JTAG-to-AXI).
+
+**Датчики.** xcvu37p — SSI-кристалл из трёх SLR, в каждом свой SYSMONE4. Ставятся все
+три (`vcu128_sysmon`, по экземпляру на SLR; размещение как у System Management Wizard для
+virtexuplusHBM: master — `SYSMONE4_X0Y0` в SLR0, ведомые X0Y1, X0Y2). Конфигурация —
+режим секвенсора по умолчанию (температура и VCCINT/VCCAUX/VCCBRAM, усреднение,
+калибровка), порог OT по умолчанию 125 °C (`BITSTREAM.CONFIG.OVERTEMPSHUTDOWN Enable` —
+аппаратное отключение, независимо от этой логики); задан только делитель АЦП
+(`INIT_42`: DCLK 100 МГц / 20 = 5 МГц). DRP — на clk100; `vcu128_sysmon_drp` по кругу
+читает регистры состояния 0x00 (температура), 0x01 (VCCINT), 0x02 (VCCAUX), 0x06 (VCCBRAM)
+каждого SLR (12 чтений), раз в 1 мс выставляет снимок и переключает `snap_tog`. Доступ JTAG
+(hw_manager) к master SYSMON сохраняется: DRP SYSMON сам отдаёт приоритет JTAG, чтение из
+логики ждёт DRDY до 65 535 тактов (655 мкс), при таймауте — флаг ошибки DRP, прежнее
+значение остаётся. Температуры HBM — от IP (`DRAM_x_STAT_TEMP`, °C, 7 бит), CATTRIP — как
+раньше.
+
+**Переход в core_clk.** Снимок держится ≥ 1 мс; `vcu128_thermal` видит переключение
+`snap_tog` через двухтриггерный синхронизатор и копирует снимок (`cap_*`);
+`vcu128_thermal.tcl`: `set_false_path` на синхронизаторы (`tog_s1`, `ot_s1`),
+`set_max_delay -datapath_only 10` с `snap*` на `cap_*` — от частоты core_clk не зависит.
+HBM-температура уже синхронизирована в `vcu128_platform_regs`; значение принимается, когда
+два отсчёта подряд совпали (биты идут через отдельные синхронизаторы).
+
+**Формат.** Код ПЛИС — старшие 12 бит регистра SYSMON ([15:4]);
+T = code × 509,3140064 / 4096 − 280,2308787 (UG580, внутренняя опора; та же формула —
+upstream `regs.temp_c(code, "xilinxus")`). В регистрах — 1/16 °C со знаком:
+((code × 32596 + 8192) >> 14) − 4484 (в пределах 1/16 °C). Напряжения — 10-битный код
+([15:6]), V = code × 3 / 1024.
+
+**upstream R_TEMP.** В `.temp` ядра (`otpu_board`, регистр 0x4C TEMP, CAPS.temp) подаётся
+код самого горячего прочитанного SLR (12 бит, 0 — ещё нет отсчёта → TEMP_VALID = 0).
+Board.info считает temp_c по `opentpu.target.by_platform(CFG_PLATFORM)`; цели VCU128
+(platform_id 3) в upstream `targets/` нет, и формула была бы XADC 7-series (на ~4 °C выше).
+`otpu_eth.install_target()` (вызывается в `EthTransport.__init__`) оборачивает
+`by_platform`: для 3 — `target/vcu128.toml` (family `xilinxus`). Upstream не меняется.
+
+**Логика (core_clk).** Датчики i: SLR0..SLR2, HBM0, HBM1. Для каждого два уровня с
+гистерезисом H: WARN включается при T ≥ W, выключается при T < W − H; ALARM — так же с A.
+ПЛИС — FPGA_LIM (умолчание 85/100 °C, H = 10), HBM — HBM_LIM (85/95 °C, H = 5); оба ниже
+аппаратного OT 125 °C. Датчик без отсчёта (SLR, не ответивший ни разу; HBM до
+калибровки) не участвует. Защёлки WARN/ALARM (по датчикам), CATTRIP, HOLD — до записи
+CLR_FLAGS (при сохраняющейся причине сразу ставятся снова); максимумы с момента сброса —
+до CLR_MAX (становятся текущими); счётчики удержаний и предупреждений.
+
+**Действие — HOLD.** Включается при ACT_EN и (ALARM любого датчика или, при CATTRIP_ACT,
+HBM CATTRIP), либо FORCE_HOLD (проверка действия хостом). На фронте HOLD
+`vcu128_ctl_guard` (между коммутатором и `otpu_board` s_ctl) дожидается простоя порта и
+сам пишет CTRL = 0 — то же, что `Board.abort` хоста: прогон останавливается сразу,
+уже выданное в память дописывается (контракт `otpu_ctrl`); пока HOLD, вход calib ядра
+держится в 0, поэтому `otpu_ctrl` не принимает ни RUN, ни LOAD (хост получает ошибку
+«did not start the run», STATUS CALIB0/1 при этом читаются 0 — причина видна в TH_STATUS
+и STATUS[21]). HBM, 40G, регистры и JTAG продолжают работать: хост видит причину и
+состояние. HOLD снимается, когда FORCE_HOLD = 0 и либо ACT_EN = 0 (хост взял управление на
+себя), либо все ALARM погасли (T < A − H), CATTRIP не учитывается, и задан AUTO_RESUME или
+записан RESUME (RESUME до охлаждения игнорируется). Прерванный прогон не продолжается —
+хост запускает его заново.
+
+Почему так: гашение core_clk (BUFGCE) остановило бы и регистры, и AXI-Lite коммутатор
+(ответ s_ctl не пришёл бы — зависли бы и JTAG, и 40G), а при снятии — оставило бы ядро в
+середине обращений к памяти; сброс слайса потребовал бы правки upstream и рвал бы
+транзакции `otpu_mem_ch` с HBM. Запись CTRL = 0 и блокировка calib используют только
+документированные входы upstream, тактирование и HBM/40G не трогают. Аппаратная защита
+(OT 125 °C → отключение конфигурации) остаётся последним рубежом.
+
+**Регистры (окно 0x40000).**
+
+| Адрес | Имя | Доступ | Поля |
+|---|---|---|---|
+| 0x04 | STATUS | R | прежние [18:0]; [19] WARN (сейчас), [20] ALARM (защёлка), [21] HOLD |
+| 0x20 | TH_INFO | R | [3:0] число SLR (3), [7:4] master SLR (0), [15:8] версия (1), [16] = 1 |
+| 0x24 | TH_CTRL | R/W | [0] ACT_EN (1), [1] AUTO_RESUME (0), [2] CATTRIP_ACT (1), [3] FORCE_HOLD (0); запись 1: [8] RESUME, [9] сброс защёлок, [10] сброс максимумов |
+| 0x28 | TH_STATUS | R | [0] WARN, [1] ALARM, [2] CATTRIP, [3] HOLD, [4] WARN защ., [5] ALARM защ., [6] CATTRIP защ., [7] HOLD защ., [8] COOL, [9] все SLR прочитаны, [10] таймаут DRP (защ.), [20:16] WARN защ. по датчикам, [28:24] ALARM защ. по датчикам (SLR0, SLR1, SLR2, HBM0, HBM1) |
+| 0x2C | TH_FPGA_LIM | R/W | [7:0] warn °C (85), [15:8] alarm °C (100), [23:16] гистерезис °C (10) |
+| 0x30 | TH_HBM_LIM | R/W | то же для HBM (85, 95, 5) |
+| 0x34 | TH_EVENTS | R | [15:0] включений HOLD, [31:16] фронтов WARN (насыщаются) |
+| 0x38 | TH_RAW | R | [11:0] код в `.temp` ядра (самый горячий SLR), [18:16] выходы OT SYSMON |
+| 0x3C | TH_ABORTS | R | [15:0] записей CTRL = 0 от `vcu128_ctl_guard` |
+| 0x40 + 4s | T_SLRs | R | [15:0] текущая, [31:16] максимум, 1/16 °C со знаком (0x8000 — нет отсчёта) |
+| 0x4C | T_HBM | R | [7:0]/[15:8] стек 0/1 сейчас, [23:16]/[31:24] максимумы, °C |
+| 0x50 + 4s | V_SLRs | R | [9:0] VCCINT, [19:10] VCCAUX, [29:20] VCCBRAM: код × 3 В / 1024 |
+
+Запись в 0x20…0x5C вне R/W-регистров — OKAY без действия; 0x60 и выше — SLVERR (раньше
+SLVERR начинался с 0x20). Карта upstream (`otpu_board`, REGMAP 5) не меняется: TEMP и
+CAPS.temp там уже были, теперь TEMP_VALID = 1 после первого отсчёта.
+
+Хост:
+
+    python vcu128_otpu/tools/otpu_temp.py [--watch 2] [--json]
+    python vcu128_otpu/tools/otpu_temp.py --fpga 85 100 10 --hbm 85 95 5
+    python vcu128_otpu/tools/otpu_temp.py --resume | --clear | --clear-max | --act off | --auto on
+    vivado -mode batch -nolog -nojournal -source vcu128_otpu/tools/jtag/thermal.tcl [-tclargs watch 2]
+
+## Два слайса (S = 2)
+
+- Цель `target/vcu128.toml`: S = 2, остальные поля arch — как у upstream `bcu1525.toml`
+  (arch_hash 0xc6166c02 = CFG_HASH, у S = 1 было 0xff270e6e); DRAM_BYTES 4 GiB на слайс
+  (2 GiB каждого из двух его каналов). Слайс s — каналы 2s, 2s + 1.
+- HBM: все 16 портов `vcu128_hbm` (по четыре на канал, раскладка otpu/hbm-bw — выше);
+  при S = 1 порты каналов 2, 3 заглушены в `otpu_vcu128_top`.
+- 40G-мост: NC = 2S = 4 канала DMA.
+- Размещение (`constr/vcu128_floorplan.tcl`, только реализация): HBM у нижнего края SLR0,
+  QSFP1 (квад 135) в SLR2. В SLR0 — слайс 0, оболочка (`u_ctrl`, коллективный блок,
+  трасса) и все четыре `otpu_mem_ch` с `otpu_hbm_port`; в SLR1 — слайс 1. Нативные порты
+  каналов 2, 3 пересекают SLR0/SLR1 через пару `otpu_native_reg` (`otpu_bcu_sys` SLL =
+  4'b1100), управление/статус/коллектив слайса 1 — через пары `otpu_xr` (`g_xs.g_x[1]`);
+  простые D-триггеры по обе стороны пересечения — `USER_SLL_REG` (Laguna).
+- DMA моста 40G (eth_clk, 312,5 МГц) идёт в `otpu_bcu_sys` через `vcu128_xreg`: две ступени
+  `axi_register` (verilog-axi, skid на всех пяти каналах AXI) на канал; без них при S = 2
+  на старой раскладке портов (ветка otpu/s2, 88f6cb5) не сошлись пути eth_clk моста к
+  `otpu_mem_ch` каналов вдоль HBM (WNS −0,430 нс).
+  Статус линка 40G в `eth40_regs` — через ещё один простой регистр (`link_s3`).

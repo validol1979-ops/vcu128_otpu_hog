@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 11:32:57 +0300
+Subject: [PATCH 5/8] gemma4: ple_S for a PLE record's blocks (was S, easily
+ taken for the slice count)
+
+Descriptor field m.S / ns.S -> ple_S, _ple_records(..., S, ...) -> ple_S and its worker job; no behaviour
+change. Groundwork for Gemma 4 on several slices (cfg.S). tests/test_gemma4.py: 38 passed, 4 skipped
+(3 --runslow, 1 no gemma-4-E2B-it). Codex gpt-6-luna (low), reviewed.
+
+diff --git a/opentpu/llm/gemma4.py b/opentpu/llm/gemma4.py
+index b2bbaa42..14798241 100644
+--- a/opentpu/llm/gemma4.py
++++ b/opentpu/llm/gemma4.py
+@@ -1389,7 +1389,7 @@ class Image:
+ 
+         ns = SimpleNamespace(
+             spec=spec, layer=layer, runs=self.runs, subs=self.subs, rows=R, block=self.block,
+-            ring=self.ring, rw=self.rw, S=self.ple_S, ple_format=self.ple_format,
++            ring=self.ring, rw=self.rw, ple_S=self.ple_S, ple_format=self.ple_format,
+             head_format=self.head_format, ple_host=self.ple_host,
+             ple_mbox=self.io.get("ple_mbox"),
+             x=_tdesc(self.io["x"], (R, H)), pe=_tdesc(self.io["pe"], (R, self.ple_S * D)),
+@@ -1441,9 +1441,9 @@ class Image:
+         raise KeyError(li)
+ 
+ 
+-def _ple_records(rows, cols, fmt: str, D: int, S: int, scale: float) -> np.ndarray:
++def _ple_records(rows, cols, fmt: str, D: int, ple_S: int, scale: float) -> np.ndarray:
+     x = np.asarray(rows, np.float32)[:, np.asarray(cols)] * np.float32(scale)
+-    return GA.pack_records(x, fmt, D, S)
++    return GA.pack_records(x, fmt, D, ple_S)
+ 
+ 
+ # ---- Image.build's quantization jobs: in worker processes, cached by content
+@@ -1497,8 +1497,8 @@ def _job(W, job) -> tuple:
+         a = _job_matrix(W, name, sel, scale)
+         return tuple(x for pr in Q.column_parts(*QC.quantize_mxu(a, fmt, D), fmt, a.shape[1],
+                                                  C, D) for x in pr)
+-    _, name, sel, cols, fmt, D, S, scale = job
+-    return (_ple_records(_job_matrix(W, name, sel, 1.0), cols, fmt, D, S, scale),)
++    _, name, sel, cols, fmt, D, ple_S, scale = job
++    return (_ple_records(_job_matrix(W, name, sel, 1.0), cols, fmt, D, ple_S, scale),)
+ 
+ 
+ def _worker_job(job) -> tuple:
+@@ -1774,7 +1774,7 @@ def _gathered(m, pos):
+         MB.wait_served(m.ple_mbox)      # served every request (the generate loop's post)
+     pe = None if m.ple is None else \
+         GA.gather_record(op(m.ple_format), m.ple, 0 if m.ple_host else pos.tok, m.ple_format,
+-                         m.S).reshape(1, m.S * D)       # ple_host: the slot's row
++                         m.ple_S).reshape(1, m.ple_S * D)       # ple_host: the slot's row
+     ops.clear()
+     return e.reshape(1, H), pe, _pos_rows(m, pos)
+ 
+@@ -1819,7 +1819,7 @@ def _gathered_rows(m, tokens):
+                 e[r, :].set(GA.gather_row(oh, m.head_tab, t, fmt))
+             else:
+                 ol.store(m.pe[r, :], GA.gather_record(oh, m.ple, r if m.ple_host else t, fmt,
+-                                                      m.S))
++                                                      m.ple_S))
+         del oh
+     return e
+ 
+@@ -1836,7 +1836,7 @@ def _gathered_out(m, pos):
+         oh = GA.operand(m.onehot["int8" if fmt == "int8" else "4bit"])
+         for r in range(pos.R):
+             if tab is m.ple and m.ple_host:
+-                ol.store(m.pe[r, :], GA.gather_record(oh, tab, r, fmt, m.S))
++                ol.store(m.pe[r, :], GA.gather_record(oh, tab, r, fmt, m.ple_S))
+                 continue
+             t = tk[r:r + 1]
+             b.check_live(t)
+@@ -1849,7 +1849,7 @@ def _gathered_out(m, pos):
+             if tab is m.head_tab:
+                 e[r, :].set(GA.gather_row(oh, one, 0, fmt))
+             else:
+-                ol.store(m.pe[r, :], GA.gather_record(oh, one, 0, fmt, m.S))
++                ol.store(m.pe[r, :], GA.gather_record(oh, one, 0, fmt, m.ple_S))
+             b.unscratch(rd)
+             b.unscratch(rs)
+         del oh

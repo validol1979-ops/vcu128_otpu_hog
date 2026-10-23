@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Схема слайса: варианты</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#666;--card:#fff;--line:#ddd}
+@media (prefers-color-scheme:dark){:root{--bg:#18181a;--fg:#eee;--mut:#aaa;--card:#222226;--line:#333}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+main{max-width:1500px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:8px 0 4px} p.m{color:var(--mut);margin:0 0 16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 18px}
+h2{font-size:18px;margin:0 0 6px} ul{margin:4px 0 10px 18px;padding:0}
+img{width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:#fff}
+a{color:#3b6fb6}
+</style></head><body><main>
+<h1>Структурная схема слайса openTPU — пять вариантов</h1>
+<p class="m">Одно содержание (slice_structure.dot, slice.md), разные инструменты. Картинки — превью PNG; для чтения мелкого текста открывайте PDF/SVG.</p>
+
+<section><h2>0. Graphviz (текущая, автоматическая раскладка)</h2>
+<ul><li>Исходник: <code>../slice_structure.dot</code>; пересборка одной командой <code>dot</code>; правки — только текст.</li>
+<li>Минусы: раскладку не контролируем, косые линии и длинные обходы.</li></ul>
+<p><a href="../slice_structure.pdf">PDF</a> · <a href="../slice_structure.svg">SVG</a></p>
+<img src="../slice_structure.svg" alt="Graphviz"></section>
+
+<section><h2>1. LaTeX / TikZ</h2>
+<ul><li>Качество печати, шрифт DejaVu Sans, только ортогональные линии, пересечения с белой подложкой.</li>
+<li>Минусы: ручные координаты, правка — только в .tex; ~15 пересечений; крупный лист.</li></ul>
+<p><a href="tikz/slice_tikz.pdf">PDF</a> · <a href="tikz/slice_tikz.tex">.tex</a> · сборка <code>tikz/build.sh</code></p>
+<img src="tikz/slice_tikz.png" alt="TikZ"></section>
+
+<section><h2>2. KiCad 10</h2>
+<ul><li>Чертёж A3 со штампом, блоки — символы с выводами, провода, ERC 0; открывается и правится в Eeschema.</li>
+<li>Минусы: стрелки и подписи не привязаны к проводам (при ручной правке не поедут); мелкий шрифт KiCad.</li></ul>
+<p><a href="kicad/slice_kicad.pdf">PDF</a> · <a href="kicad/slice_kicad.svg">SVG</a> · проект <code>kicad/slice_kicad.kicad_pro</code> · генератор <code>kicad/gen.py</code></p>
+<img src="kicad/slice_kicad.png" alt="KiCad"></section>
+
+<section><h2>3. SVG с ручной раскладкой (Python)</h2>
+<ul><li>Ортогональные линии со скруглениями, толщина ~ пропускная способность, легенда, светлая и тёмная тема; блоки SEQ в ряд.</li>
+<li>Минусы: ~10 пересечений (с разрывом), ручные координаты в генераторе.</li></ul>
+<p><a href="svg/slice_svg.svg">SVG</a> · <a href="svg/slice_svg.pdf">PDF</a> · генератор <code>svg/gen_slice_svg.py</code></p>
+<img src="svg/slice_svg.svg" alt="SVG"></section>
+
+<section><h2>4. Изометрическая фигура (интерактивная)</h2>
+<ul><li>Для презентаций: объёмные блоки, подсказки при наведении, анимация потока чанков; клавиша T — тема.</li>
+<li>Минусы: мало текста, нет управляющих связей на картинке (только в подсказках); не для документации.</li></ul>
+<p><a href="isometric/slice_isometric.html">Интерактивная страница</a> · <a href="isometric/slice_isometric.svg">SVG</a></p>
+<img src="isometric/slice_isometric.png" alt="Изометрия"></section>
+</main></body></html>

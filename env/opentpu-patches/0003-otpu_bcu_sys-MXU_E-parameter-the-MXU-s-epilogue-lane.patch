@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:54:28 +0300
+Subject: [PATCH 3/8] otpu_bcu_sys: MXU_E parameter (the MXU's epilogue lanes)
+ to otpu_board
+
+otpu_board and otpu_mxu take MXU_E (0: MCOLS / 2); otpu_bcu_sys did not pass
+it, so a board on this wrapper could not build the full-rate epilogue of
+ypcb-00338:m8 (MXU_E = MCOLS = 8). vcu128_otpu kept a copy of the file for
+this one line (otpu/mcols8). Default 0: BCU1525 unchanged.
+
+diff --git a/rtl/boards/bcu1525/otpu_bcu_sys.sv b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+index 590ca1f1..d513b43e 100644
+--- a/rtl/boards/bcu1525/otpu_bcu_sys.sv
++++ b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+@@ -36,6 +36,7 @@ module otpu_bcu_sys #(
+   parameter int TMEM_SDM   = -1,
+   parameter int MXU_IMPL   = 2,
+   parameter int MXU_CL     = 16,
++  parameter int MXU_E      = 0,             // MXU epilogue lanes (otpu_board; 0: MCOLS / 2)
+   parameter int VPU_CL     = 2,
+   parameter int ULANES     = 8,
+   parameter int TRACE_DEPTH = 16384,
+@@ -200,7 +201,7 @@ module otpu_bcu_sys #(
+   otpu_board #(.S(S), .D(D), .MCOLS(MCOLS), .ACT_ROWS(ACT_ROWS), .ACT_BLOCKS(ACT_BLOCKS),
+                .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS), .FIFO_DEPTH(FIFO_DEPTH),
+                .LANES(LANES), .WIN(WIN), .RPB(RPB), .WPB(WPB), .MXU_IMPL(MXU_IMPL),
+-               .MXU_CL(MXU_CL), .VPU_CL(VPU_CL), .ULANES(ULANES), .CORE_KHZ(CORE_KHZ),
++               .MXU_CL(MXU_CL), .MXU_E(MXU_E), .VPU_CL(VPU_CL), .ULANES(ULANES), .CORE_KHZ(CORE_KHZ),
+                .BUILD_ID(BUILD_ID), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH),
+                .PQ_WIN(PQ_WIN), .HAS_I2C(1'b0), .CHASH(CHASH), .DSTEP(DSTEP),
+                .HOSTCAL(1'b0), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM), .ARCH_HASH(ARCH_HASH),

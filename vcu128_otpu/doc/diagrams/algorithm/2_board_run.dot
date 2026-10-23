@@ -1,0 +1,31 @@
+// Level 2: one run on the card (otpu_ctrl registers, otpu_slice reset/loader/halt).
+digraph run {
+  graph [fontname="Helvetica", fontsize=12, labelloc=t, nodesep=0.45, ranksep=0.5,
+         label="Уровень 2. Прогон на плате: регистры otpu_ctrl и слайс"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#396484", fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9, color="#396484"];
+  start [shape=circle, label="", width=0.25, style=filled, fillcolor="#17324d"];
+  uncal [label="NOT_CALIBRATED\nCALIB0/1 = 0\nRUN и LOAD игнорируются", fillcolor="#ffe3e3"];
+  idle [label="IDLE\nRUN = 0, слайс в сбросе\nхост пишет HBM, ARG, PROG_*"];
+  loading [label="LOADING\nSTATUS.LOADING = 1\nзагрузчик: PROG_N инструкций\nиз HBM[PROG_ADDR] → IMEM\n(1 чанк 128 B = 4 инстр./такт)"];
+  running [label="RUNNING\nRUN = 1, R8..R15 ← ARG0..7\nSEQ исполняет программу\nCYCLES, ICOUNT, B_RD … считают", fillcolor="#e6f4ea"];
+  chain [label="CHAIN\nHALT CHAIN: загрузка\nR[rb] инструкций из R[ra]\nTMEM/HBM сохраняются", fillcolor="#f0e6ff"];
+  halted [label="HALTED\nокно SEQ опустело\nSTATUS.HALTED = 1"];
+  drain [label="WR_DRAIN\nждать STATUS.WR_IDLE:\nвсе записи слайса\nприняты HBM"];
+  error [label="ERROR\nнедопустимая инструкция\nили WAITW таймаут", fillcolor="#ffe3e3"];
+
+  start -> uncal;
+  uncal -> idle [label="HBM откалиброван"];
+  idle -> loading [label="CTRL.LOAD = 1"];
+  loading -> idle [label="копия закончена"];
+  idle -> idle [label="CTRL.CLEAR\n(сброс счётчиков)"];
+  idle -> running [label="CTRL: 0 → RUN"];
+  running -> chain [label="HALT CHAIN"];
+  chain -> running [label="IMEM перезагружен"];
+  running -> halted [label="HALT"];
+  running -> error;
+  running -> idle [label="CTRL.RUN = 0\n(принудительный стоп)", style=dashed];
+  halted -> drain [label="хост: poll HALTED"];
+  error -> drain [label="хост видит ERROR"];
+  drain -> idle [label="CTRL = 0"];
+}

@@ -29,6 +29,27 @@ CONFIGS = {
     "big": dict(params={"CH_BASE": "33'h080000000", "PC_GRAN": 5, "PC_XOR": 0, "RD": 64,
                         "WD": 64, "WQ": 16, "AQ": 8},
                 env=dict(HBM_CH_BASE="0x80000000", HBM_PC_GRAN="5", HBM_PC_XOR="0")),
+    # NS = 2: два AXI-порта на native-порт (подпорт -- старший бит номера псевдоканала)
+    "base2": dict(params={"NS": 2},
+                  env=dict(HBM_CH_BASE="0", HBM_PC_GRAN="0", HBM_PC_XOR="1", HBM_NS="2")),
+    "small2": dict(params={"NS": 2, "CH_BASE": "33'h180000000", "PC_GRAN": 2, "RD": 8, "WD": 4,
+                           "WQ": 4, "AQ": 2},
+                   env=dict(HBM_CH_BASE="0x180000000", HBM_PC_GRAN="2", HBM_PC_XOR="1",
+                            HBM_NS="2")),
+    "deep2": dict(params={"NS": 2, "CH_BASE": "33'h080000000", "PC_GRAN": 1, "PC_XOR": 0,
+                          "RD": 64, "WD": 64, "WQ": 16, "AQ": 8},
+                  env=dict(HBM_CH_BASE="0x80000000", HBM_PC_GRAN="1", HBM_PC_XOR="0",
+                           HBM_NS="2")),
+    # NS = 4: четыре AXI-порта на native-порт
+    "base4": dict(params={"NS": 4},
+                  env=dict(HBM_CH_BASE="0", HBM_PC_GRAN="0", HBM_PC_XOR="1", HBM_NS="4")),
+    # PCB = 2: канал 1 GiB из 4 псевдоканалов (S = 4: восемь каналов), канал 3 (3 GiB)
+    "p2ns2": dict(params={"NS": 2, "PCB": 2, "CH_BASE": "33'h0C0000000"},
+                  env=dict(HBM_CH_BASE="0xC0000000", HBM_PC_GRAN="0", HBM_PC_XOR="1", HBM_NS="2",
+                           HBM_PCB="2")),
+    "p2ns4": dict(params={"NS": 4, "PCB": 2, "CH_BASE": "33'h1C0000000", "PC_GRAN": 3},
+                  env=dict(HBM_CH_BASE="0x1C0000000", HBM_PC_GRAN="3", HBM_PC_XOR="1", HBM_NS="4",
+                           HBM_PCB="2")),
 }
 VFLAGS = ["-Wno-fatal", "-Wno-lint", "-Wno-style", "-O3"]
 
@@ -74,7 +95,14 @@ def get(runners, name):
 UNIT = [("base", c) for c in ("random_traffic", "hazard_pairs", "resp_errors", "stream_read",
                               "stream_write", "stream_mixed", "stream_read_lat100")] + \
        [(k, c) for k in ("small", "big") for c in ("random_traffic", "hazard_pairs",
-                                                   "resp_errors", "stream_read")]
+                                                   "resp_errors", "stream_read")] + \
+       [("base2", c) for c in ("random_traffic", "hazard_pairs", "resp_errors", "stream_read",
+                               "stream_write", "stream_mixed", "stream_read_lat100")] + \
+       [(k, c) for k in ("small2", "deep2", "base4") for c in ("random_traffic", "hazard_pairs",
+                                                              "resp_errors", "stream_read")] + \
+       [("p2ns2", c) for c in ("random_traffic", "hazard_pairs", "resp_errors", "stream_read",
+                               "stream_write", "stream_mixed", "stream_read_lat100")] + \
+       [("p2ns4", c) for c in ("random_traffic", "hazard_pairs", "resp_errors", "stream_read")]
 
 
 @pytest.mark.parametrize("cfg,case", UNIT)
@@ -131,15 +159,64 @@ def test_amap_exhaustive():
 
 # ---------------------------------------------------------------- связка otpu_mem_ch + otpu_hbm_port
 SYS = [("random_both", 10000), ("stream_n_read", 10000), ("stream_n_write", 10000),
-       ("stream_n_read", 4444), ("stream_n_write", 4444), ("stream_x", 10000)]
+       ("stream_n_read", 4444), ("stream_n_write", 4444), ("stream_x", 10000),
+       # ядро 150 и 200 МГц (TODO «Сначала тракт HBM»: цель 64 Б/такт ядра)
+       ("stream_n_read", 6666), ("stream_n_write", 6666), ("stream_n_read", 5000),
+       ("stream_n_write", 5000)]
+
+
+# NS = 2 (сборка платы): те же тесты, ядро 100/150/200/225 МГц
+SYS2 = [("random_both", 10000), ("stream_x", 10000)] + \
+       [(c, k) for k in (10000, 6666, 5000, 4444) for c in ("stream_n_read", "stream_n_write")]
+
+
+def sys_case(runners, ns, case, clk_ps, ard=None, lat=None, pcb=None):
+    name = ("sys" if ns == 1 else f"sys{ns}") + (f"_ard{ard}" if ard else "") + \
+        (f"_p{pcb}" if pcb else "")
+    if name not in runners:
+        params = {} if ns == 1 else {"NS": ns}
+        if ard:
+            params["ARD"] = ard
+        if pcb:
+            params["PCB"] = pcb
+        runners[name] = build(name, [SHELL / "otpu_afifo.sv", SHELL / "otpu_mem_ch.sv", HBM,
+                                     SIM / "tb_memch_hbm.sv"], "tb_memch_hbm", params)
+    env = {**CONFIGS["base"]["env"], "SYS_CLK_PS": str(clk_ps), "HBM_NS": str(ns)}
+    if lat:
+        env["SYS_HBM_LAT"] = str(lat)
+    if pcb:
+        env["HBM_PCB"] = str(pcb)
+    fails, log = run(runners[name], "tb_memch_hbm", "cocotb_memch_hbm", case,
+                     f"{name}_{case}_clk{clk_ps}" + (f"_lat{lat}" if lat else ""), env)
+    assert not fails, f"{fails}: {log}"
 
 
 @pytest.mark.parametrize("case,clk_ps", SYS)
 def test_system(runners, case, clk_ps):
-    if "sys" not in runners:
-        runners["sys"] = build("sys", [SHELL / "otpu_afifo.sv", SHELL / "otpu_mem_ch.sv", HBM,
-                                       SIM / "tb_memch_hbm.sv"], "tb_memch_hbm", {})
-    fails, log = run(runners["sys"], "tb_memch_hbm", "cocotb_memch_hbm", case,
-                     f"sys_{case}_clk{clk_ps}",
-                     {**CONFIGS["base"]["env"], "SYS_CLK_PS": str(clk_ps)})
-    assert not fails, f"{fails}: {log}"
+    sys_case(runners, 1, case, clk_ps)
+
+
+@pytest.mark.parametrize("case,clk_ps", SYS2)
+def test_system_ns2(runners, case, clk_ps):
+    sys_case(runners, 2, case, clk_ps)
+
+
+# Кредиты чтения otpu_mem_ch (ARD, патч P1): поток чтения ускорителя при задержке HBM 60/100
+# тактов uclk, NS = 2, ядро 150 и 200 МГц. Предел -- ARD beat в полёте на задержку тракта.
+SYSARD = [(ard, lat, clk) for ard in (64, 128, 256) for lat in (60, 100) for clk in (6666, 5000)]
+
+
+@pytest.mark.parametrize("ard,lat,clk_ps", SYSARD)
+def test_system_ard(runners, ard, lat, clk_ps):
+    sys_case(runners, 2, "stream_n_read", clk_ps, ard=ard, lat=lat)
+
+
+# Канал 1 GiB (PCB = 2, S = 4: восемь каналов), NS = 2, ARD 256: случайный трафик обоих мастеров,
+# потоки ускорителя при 200 МГц, XDMA
+SYSP2 = [("random_both", 5000), ("stream_x", 5000), ("stream_n_read", 5000),
+         ("stream_n_write", 5000)]
+
+
+@pytest.mark.parametrize("case,clk_ps", SYSP2)
+def test_system_pcb2(runners, case, clk_ps):
+    sys_case(runners, 2, case, clk_ps, ard=256, pcb=2)

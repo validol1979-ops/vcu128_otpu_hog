@@ -1,4 +1,4 @@
-"""Сборка tb_eth40 (Verilator) и прогон тестов cocotb test_eth40 для NC = 2 и 4.
+"""Сборка tb_eth40 (Verilator) и прогон тестов cocotb test_eth40 для NC = 2, 4 и 8.
 Запуск — run.sh. Результаты: out/nc<NC>/results.xml, журнал — out/nc<NC>/sim.log."""
 from __future__ import annotations
 

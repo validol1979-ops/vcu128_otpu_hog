@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 15:34:06 +0300
+Subject: [PATCH 4/8] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at any
+ S, SLL2 (two SLR crossings), CH_LOG2
+
+- otpu_board: CH_LOG2 (default 31): the channel size it reports (CFG_DRAM: DRAM_LOG2 =
+  CH_LOG2 + 1, CH_LOG2), so that a board with smaller channels (VCU128 at S = 4: eight HBM
+  channels of 1 GiB, 2 GiB a slice) never gets data placed past them. Default: unchanged.
+- otpu_bcu_sys: SLL is 2 * S bits (was 4: S = 2 only), default as before; SLL2 marks the
+  channels whose native port crosses two SLRs (a slice in the SLR beyond the next): a third
+  otpu_native_reg, u_mid, between u_tx and u_rx; CH_LOG2 passed to otpu_board.
+Verilator lint of otpu_bcu_sys (generic cells): S = 2 defaults and S = 4, SLL 8'hF0, SLL2
+8'hC0, CH_LOG2 30, no errors.
+
+diff --git a/rtl/boards/bcu1525/otpu_bcu_sys.sv b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+index d513b43e..3f045941 100644
+--- a/rtl/boards/bcu1525/otpu_bcu_sys.sv
++++ b/rtl/boards/bcu1525/otpu_bcu_sys.sv
+@@ -52,7 +52,12 @@ module otpu_bcu_sys #(
+   // bit j: board channel j's native port crosses an SLR (slice 0 in SLR0 on DIMM C1 in SLR1,
+   // slice 1 in SLR2 on C2 in SLR1: channels 1 and 3; constraints/bcu1525_floorplan.xdc): two
+   // otpu_native_reg, u_tx with the slice and u_rx with the channel, flip-flop to flip-flop across
+-  parameter logic [3:0] SLL = 4'b1010,
++  // (2 * S bits: one per channel)
++  parameter logic [2*S-1:0] SLL = (2 * S)'(4'b1010),
++  // bit j (with SLL[j]): channel j's native port crosses two SLRs (a slice in the SLR beyond the
++  // next): a third otpu_native_reg, u_mid, in the SLR between, so that no path spans two crossings
++  parameter logic [2*S-1:0] SLL2 = '0,
++  parameter int CH_LOG2    = 31,            // log2 bytes per channel a slice addresses (otpu_board)
+   // otpu_mem_ch's accelerator read credits (beats in flight per channel): the read stream's rate is
+   // at most ARD beats per round trip through the controller, so a memory of a longer latency (HBM)
+   // needs more than the DDR4 cores' 64. Not a target parameter: the core does not see it.
+@@ -156,9 +161,27 @@ module otpu_bcu_sys #(
+         .s_wdone(b_wdone[j]), .s_err(b_err[j]),
+         .m_cvalid(cv), .m_cready(cr), .m_cwe(cwe), .m_caddr(ca), .m_wvalid(wv), .m_wready(wr),
+         .m_wdata(wd), .m_wmask(wm), .m_rvalid(rv), .m_rdata(rd), .m_wdone(wdone), .m_err(err));
++      logic mcv, mcr, mcwe, mwv, mwr, mrv, merr;
++      logic [24:0] mca;
++      logic [511:0] mwd, mrd;
++      logic [63:0] mwm;
++      logic [15:0] mwdone;
++      if (SLL2[j]) begin : g_mid
++        otpu_native_reg u_mid (.clk, .rst,
++          .s_cvalid(cv), .s_cready(cr), .s_cwe(cwe), .s_caddr(ca), .s_wvalid(wv), .s_wready(wr),
++          .s_wdata(wd), .s_wmask(wm), .s_rvalid(rv), .s_rdata(rd), .s_wdone(wdone), .s_err(err),
++          .m_cvalid(mcv), .m_cready(mcr), .m_cwe(mcwe), .m_caddr(mca), .m_wvalid(mwv),
++          .m_wready(mwr), .m_wdata(mwd), .m_wmask(mwm), .m_rvalid(mrv), .m_rdata(mrd),
++          .m_wdone(mwdone), .m_err(merr));
++      end else begin : g_one
++        assign mcv = cv; assign cr = mcr; assign mcwe = cwe; assign mca = ca;
++        assign mwv = wv; assign wr = mwr; assign mwd = wd; assign mwm = wm;
++        assign rv = mrv; assign rd = mrd; assign wdone = mwdone; assign err = merr;
++      end
+       otpu_native_reg u_rx (.clk, .rst,
+-        .s_cvalid(cv), .s_cready(cr), .s_cwe(cwe), .s_caddr(ca), .s_wvalid(wv), .s_wready(wr),
+-        .s_wdata(wd), .s_wmask(wm), .s_rvalid(rv), .s_rdata(rd), .s_wdone(wdone), .s_err(err),
++        .s_cvalid(mcv), .s_cready(mcr), .s_cwe(mcwe), .s_caddr(mca), .s_wvalid(mwv),
++        .s_wready(mwr), .s_wdata(mwd), .s_wmask(mwm), .s_rvalid(mrv), .s_rdata(mrd),
++        .s_wdone(mwdone), .s_err(merr),
+         .m_cvalid(n_cvalid[j]), .m_cready(n_cready[j]), .m_cwe(n_cwe[j]), .m_caddr(n_caddr[j]),
+         .m_wvalid(n_wvalid[j]), .m_wready(n_wready[j]), .m_wdata(n_wdata[j]),
+         .m_wmask(n_wmask[j]), .m_rvalid(n_rvalid[j]), .m_rdata(n_rdata[j]),
+@@ -205,6 +228,7 @@ module otpu_bcu_sys #(
+                .BUILD_ID(BUILD_ID), .DDR_MTS(DDR_MTS), .TRACE_DEPTH(TRACE_DEPTH),
+                .PQ_WIN(PQ_WIN), .HAS_I2C(1'b0), .CHASH(CHASH), .DSTEP(DSTEP),
+                .HOSTCAL(1'b0), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM), .ARCH_HASH(ARCH_HASH),
++               .CH_LOG2(CH_LOG2),
+                .TMEM_IMPL(TMEM_IMPL), .TMEM_RQ(TMEM_RQ),
+                .TMEM_NSB(TMEM_NSB), .TMEM_SBP(TMEM_SBP), .TMEM_SBH(TMEM_SBH), .TMEM_RPL(TMEM_RPL), .TMEM_TDP(TMEM_TDP),
+                .TMEM_GST(TMEM_GST), .TMEM_PMP(TMEM_PMP), .TMEM_PRK(TMEM_PRK), .TMEM_SDM(TMEM_SDM)) u_board (
+diff --git a/rtl/shell/otpu_board.sv b/rtl/shell/otpu_board.sv
+index bdf08935..365439cc 100644
+--- a/rtl/shell/otpu_board.sv
++++ b/rtl/shell/otpu_board.sv
+@@ -64,7 +64,11 @@ module otpu_board #(
+                                        // GATHER (otpu_coll_bar; CAPS2 bit0 = 0, docs/infra_hunt.md 5)
+   parameter bit SEQ_WC     = 1'b0,    // EXPERIMENTAL: otpu_seq's wait entries (WAITC, docs/seq_vpu.md; CFG_UARCH bit24)
+   parameter int PLATFORM    = 0,       // the target's platform id (CFG_PLATFORM; opentpu/target.py)
+-  parameter logic [31:0] ARCH_HASH = 32'h0  // the target's arch_hash (CFG_HASH)
++  parameter logic [31:0] ARCH_HASH = 32'h0, // the target's arch_hash (CFG_HASH)
++  parameter int CH_LOG2     = 31       // log2 bytes a slice addresses on each of its two channels
++                                       // (CFG_DRAM; 31: 2 GiB each, 4 GiB a slice). A board whose
++                                       // channels are smaller reports their size, so that the host
++                                       // never places data past them (a smaller slice: DRAM_BYTES)
+ ) (
+   input  logic         clk,
+   input  logic         clk_f,          // TMEM_PMP 1: 2 x clk, rising with it (the MMCM's); else unused
+@@ -221,9 +225,9 @@ module otpu_board #(
+               .HAS_I2C(HAS_I2C), .CHASH(CHASH), .DSTEP(DSTEP), .HOSTCAL(HOSTCAL),
+               .COLL_GATHER(COLL_GATHER),
+               .LDP(S > 1 ? 2 + 2 * XR : 2),  // LOAD to a slice's busy and back
+-              // each slice on its two channels' 2 GiB each (otpu_native_dram): 4 GiB
++              // each slice on its two channels' 2^CH_LOG2 bytes each (otpu_native_dram)
+               .S(S), .TMEM_WORDS(TMEM_WORDS), .IMEM_WORDS(IMEM_WORDS), .ACT_BLOCKS(ACT_BLOCKS),
+-              .DRAM_LOG2(32), .NCH(2), .CH_LOG2(31), .MXU_IMPL(MXU_IMPL), .TMEM_IMPL(TMEM_IMPL),
++              .DRAM_LOG2(CH_LOG2 + 1), .NCH(2), .CH_LOG2(CH_LOG2), .MXU_IMPL(MXU_IMPL), .TMEM_IMPL(TMEM_IMPL),
+               .VPU_CL(VPU_CL), .ULANES(ULANES), .SEQ_WC(SEQ_WC), .PLATFORM(PLATFORM),
+               .ARCH_HASH(ARCH_HASH)) u_ctrl (
+     .clk, .rst,

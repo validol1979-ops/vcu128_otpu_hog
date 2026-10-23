@@ -3,9 +3,50 @@
   "upstream_url": "https://github.com/FeSens/openTPU.git",
   "commit": "f237dab2f196855a59a083b1454786df8f01291f",
   "commit_date": "2026-10-14",
-  "copied_from": "../external/rtl/opentpu-fesens/upstream",
-  "copied_on": "2026-10-19",
+  "copied_from": "../external/rtl/opentpu-fesens/patched (upstream + patches/)",
+  "copied_on": "2026-10-23",
   "license_spdx": "Apache-2.0",
   "files": "rtl/{top,mxu,vpu,mem,seq,dma,shell,tech/xilinxus,tech/generic}, rtl/boards/bcu1525/otpu_bcu_sys.sv (generic: otpu_board + otpu_mem_ch per channel), boards/ypcb-00338/constraints/{otpu_mem_ch,otpu_clk2x}.tcl; paths kept",
-  "local_patches": []
+  "local_patches": [
+    {
+      "file": "patches/0001-otpu_bcu_sys-ARD-parameter-otpu_mem_ch-read-credits-.patch",
+      "subject": "[PATCH 1/8] otpu_bcu_sys: ARD parameter (otpu_mem_ch read credits per channel)",
+      "sha256": "574fc007ddd617d272ad15726840d98fa8f3587f402bcc2b8423480a22edd70b"
+    },
+    {
+      "file": "patches/0002-chat-backend-isa-in-OTPU_TARGET-s-configuration-the-.patch",
+      "subject": "[PATCH 2/8] chat: --backend isa in OTPU_TARGET's configuration; the configuration in the log",
+      "sha256": "ffe5896a499f73bfb05d6a692340e0243958cebf55d3453fc04b3e13de97bd0f"
+    },
+    {
+      "file": "patches/0003-otpu_bcu_sys-MXU_E-parameter-the-MXU-s-epilogue-lane.patch",
+      "subject": "[PATCH 3/8] otpu_bcu_sys: MXU_E parameter (the MXU's epilogue lanes) to otpu_board",
+      "sha256": "cd208b8d518a1f08f6bb228601b1db30fc380b622202329d91d21056441d2191"
+    },
+    {
+      "file": "patches/0004-otpu_board-CH_LOG2-otpu_bcu_sys-SLL-per-channel-at-a.patch",
+      "subject": "[PATCH 4/8] otpu_board CH_LOG2; otpu_bcu_sys: SLL per channel at any S, SLL2 (two SLR crossings), CH_LOG2",
+      "sha256": "691a07b215f700126ad6f7e354eb46f9768e842a4a5200fcbba327faa400581c"
+    },
+    {
+      "file": "patches/0005-gemma4-ple_S-for-a-PLE-record-s-blocks-was-S-easily-.patch",
+      "subject": "[PATCH 5/8] gemma4: ple_S for a PLE record's blocks (was S, easily taken for the slice count)",
+      "sha256": "ca63babe5a75fd2962df918434e26f9214e20700317db4d329fe9cb0fe0d6b75"
+    },
+    {
+      "file": "patches/0006-offload-BackendDram-writes-every-slice-host-row-mail.patch",
+      "subject": "[PATCH 6/8] offload: BackendDram writes every slice (host row mailboxes at S > 1)",
+      "sha256": "23a9e2d401961573fc409f5dd8b1f8a538b77aa38227ab67475b1cc0fdfbf349"
+    },
+    {
+      "file": "patches/0007-KV-head-replication-for-n_kv-S-KVDesc-rep-Qwen3-Qwen.patch",
+      "subject": "[PATCH 7/8] KV-head replication for n_kv < S (KVDesc rep): Qwen3 / Qwen3.5 / LFM2 at S > n_kv",
+      "sha256": "58cd260ed5751db4136d014d2f2764487e32cee640bd2c8d620454c2cf457e2e"
+    },
+    {
+      "file": "patches/0008-fit_embed-int8-embedding-table-where-an-fp32-one-tak.patch",
+      "subject": "[PATCH 8/8] fit_embed: int8 embedding table where an fp32 one takes over half a slice's DRAM (chat, serve)",
+      "sha256": "32dc2770df6d9a964abadd07c2542ab3d8dc0e71fb207ebeda81a957b865e53e"
+    }
+  ]
 }

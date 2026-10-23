@@ -5,7 +5,8 @@
     python otpu_eth_emu.py --port 20308 [--fake] [--drop 0.01] [--dup 0.01] [--reorder 0.01]
 
 Модель (backend) — объект с mem_write / mem_read / reg_read / reg_write: по умолчанию
-MemRegs (каналы в ОЗУ, регистры-словарь, пара тестовых регистров), с --fake — upstream
+MemRegs (каналы в ОЗУ, регистры-словарь, пара тестовых регистров, модель термоконтроля
+ThermalRegs в окне 0x40000), с --fake — upstream
 opentpu.host.fake.FakeTransport (нужен импорт opentpu). Ошибки сети вводятся в обе стороны:
 потеря, дубликат, перестановка (кадр придерживается и уходит после следующего).
 Повторы пачек регистров обслуживаются из кэша последнего ответа (SEQ, IP, порт), как на
@@ -33,12 +34,153 @@ R_TIMER = 0x0FE0        # запись t (мкс): через t мкс чтен�
 R_BAD = 0x0FD0          # доступ — ошибка AXI (SLVERR)
 
 
+class ThermalRegs:
+    """Модель термоконтроля платформы (vcu128_thermal, окно 0x40000: STATUS биты 19..21 и
+    0x20..0x5C; doc/design.md «Температура и контроль»): те же пороги с гистерезисом,
+    защёлки, максимумы, HOLD и возврат. Температуры задаются полями slr_c (°C, None — SLR
+    не прочитан) и hbm_c / hbm_cattrip; состояние пересчитывается при каждом доступе
+    (как будто после каждого раунда опроса SYSMON)."""
+    BASE = 0x40000
+    NSLR = 3
+
+    def __init__(self, slr_c=(41.0, 43.5, 42.25), hbm_c=(35, 36)):
+        self.slr_c = list(slr_c)
+        self.hbm_c = list(hbm_c)
+        self.hbm_cattrip = [False, False]
+        self.vcc = (0.85, 1.80, 0.85)
+        self.act, self.auto, self.cattrip_act, self.force = True, False, True, False
+        self.fpga_lim = [85, 100, 10]
+        self.hbm_lim = [85, 95, 5]
+        n = self.NSLR + 2
+        self.warn, self.alarm = [False] * n, [False] * n
+        self.warn_l, self.alarm_l = [False] * n, [False] * n
+        self.cattrip_l = self.hold = self.hold_l = False
+        self.tmax: list = [None] * n
+        self.n_hold = self.n_warn = self.n_abort = 0
+        self.ctl_writes: list[int] = []       # CTRL = 0 от guard (модель: список)
+
+    @staticmethod
+    def code12(t: float) -> int:
+        return max(0, min(4095, round((t + 280.2308787) * 4096 / 509.3140064)))
+
+    @staticmethod
+    def q4(code: int) -> int:
+        return ((code * 32596 + 8192) >> 14) - 4484
+
+    def _cur(self) -> list:
+        """Текущие значения в 1/16 °C (None — нет)."""
+        v = [None if c is None else self.q4(self.code12(c)) for c in self.slr_c]
+        return v + [16 * int(h) for h in self.hbm_c]
+
+    def update(self, resume: bool = False) -> None:
+        cur = self._cur()
+        wa = any(self.warn)
+        for i, t in enumerate(cur):
+            w, a, h = self.fpga_lim if i < self.NSLR else self.hbm_lim
+            if t is None:
+                self.warn[i] = self.alarm[i] = False
+                continue
+            if t >= 16 * w:
+                self.warn[i] = True
+            elif t < 16 * (w - h):
+                self.warn[i] = False
+            if t >= 16 * a:
+                self.alarm[i] = True
+            elif t < 16 * (a - h):
+                self.alarm[i] = False
+            self.warn_l[i] |= self.warn[i]
+            self.alarm_l[i] |= self.alarm[i]
+            self.tmax[i] = t if self.tmax[i] is None else max(self.tmax[i], t)
+        if any(self.warn) and not wa:
+            self.n_warn += 1
+        ct = any(self.hbm_cattrip)
+        self.cattrip_l |= ct
+        cool = not any(self.alarm) and not (self.cattrip_act and ct)
+        trig = (self.act and (any(self.alarm) or (self.cattrip_act and ct))) or self.force
+        if not self.hold and trig:
+            self.hold = self.hold_l = True
+            self.n_hold += 1
+            self.n_abort += 1
+            self.ctl_writes.append(0)
+        elif self.hold and not self.force and (not self.act or (cool and (self.auto or resume))):
+            self.hold = False
+        self.hold_l |= self.hold
+
+    def owns(self, off: int) -> bool:
+        o = off - self.BASE
+        return o == 0x04 or 0x20 <= o < 0x60
+
+    def read(self, off: int) -> int:
+        self.update()
+        o = off - self.BASE
+        n = self.NSLR + 2
+        bits = lambda v: sum(1 << i for i, b in enumerate(v) if b)
+        lim = lambda L: L[2] << 16 | L[1] << 8 | L[0]
+        cur = self._cur()
+        if o == 0x04:                   # STATUS: locks, HBM calibrated, thermal bits
+            return (any(self.warn) << 19 | any(self.alarm_l) << 20 | self.hold << 21
+                    | self.hbm_cattrip[0] << 3 | self.hbm_cattrip[1] << 4 | 0x3 << 1 | 1)
+        if o == 0x20:
+            return 1 << 16 | 1 << 8 | 0 << 4 | self.NSLR
+        if o == 0x24:
+            return self.act | self.auto << 1 | self.cattrip_act << 2 | self.force << 3
+        if o == 0x28:
+            ct = any(self.hbm_cattrip)
+            cool = not any(self.alarm) and not (self.cattrip_act and ct)
+            valid = all(c is not None for c in self.slr_c)
+            return (any(self.warn) | any(self.alarm) << 1 | ct << 2 | self.hold << 3
+                    | any(self.warn_l) << 4 | any(self.alarm_l) << 5 | self.cattrip_l << 6
+                    | self.hold_l << 7 | cool << 8 | valid << 9
+                    | bits(self.warn_l) << 16 | bits(self.alarm_l) << 24)
+        if o == 0x2C:
+            return lim(self.fpga_lim)
+        if o == 0x30:
+            return lim(self.hbm_lim)
+        if o == 0x34:
+            return min(self.n_warn, 0xFFFF) << 16 | min(self.n_hold, 0xFFFF)
+        if o == 0x38:
+            codes = [self.code12(c) for c in self.slr_c if c is not None]
+            return max(codes, default=0)
+        if o == 0x3C:
+            return self.n_abort & 0xFFFF
+        if 0x40 <= o < 0x40 + 4 * self.NSLR:
+            s = (o - 0x40) // 4
+            c, m = cur[s], self.tmax[s]
+            return ((0x8000 if m is None else m & 0xFFFF) << 16) | (0 if c is None else c & 0xFFFF)
+        if o == 0x4C:
+            h = [x // 16 for x in cur[self.NSLR:]]
+            m = [0 if x is None else x // 16 for x in self.tmax[self.NSLR:]]
+            return h[0] | h[1] << 8 | m[0] << 16 | m[1] << 24
+        if 0x50 <= o < 0x50 + 4 * self.NSLR:
+            c = [min(1023, round(v * 1024 / 3)) for v in self.vcc]
+            return c[0] | c[1] << 10 | c[2] << 20
+        return 0
+
+    def write(self, off: int, val: int) -> None:
+        o = off - self.BASE
+        if o == 0x24:
+            self.act, self.auto = bool(val & 1), bool(val & 2)
+            self.cattrip_act, self.force = bool(val & 4), bool(val & 8)
+            if val & 1 << 9:
+                n = self.NSLR + 2
+                self.warn_l, self.alarm_l = [False] * n, [False] * n
+                self.cattrip_l = self.hold_l = False
+            if val & 1 << 10:
+                self.tmax = [None] * (self.NSLR + 2)
+            self.update(resume=bool(val & 1 << 8))
+        elif o == 0x2C:
+            self.fpga_lim = [val & 0xFF, val >> 8 & 0xFF, val >> 16 & 0xFF]
+        elif o == 0x30:
+            self.hbm_lim = [val & 0xFF, val >> 8 & 0xFF, val >> 16 & 0xFF]
+
+
 class MemRegs:
-    def __init__(self, nch: int = 4, ch_bytes: int = 1 << 24):
+    def __init__(self, nch: int = 4, ch_bytes: int = 1 << 24, thermal: bool = True):
         self.ch = [np.zeros(ch_bytes, np.uint8) for _ in range(nch)]
         self.regs: dict[int, int] = {}
         self.writes: list[tuple[int, int]] = []
         self._t_ready = 0.0
+        self.thermal = ThermalRegs() if thermal else None
 
     def mem_write(self, ch, off, data):
         self.ch[ch][off:off + len(data)] = data
@@ -50,7 +192,9 @@ class MemRegs:
         if off == R_BAD:
             raise IOError("SLVERR")
         self.writes.append((off, val))
-        if off == R_STROBE:
+        if self.thermal is not None and self.thermal.owns(off):
+            self.thermal.write(off, val)
+        elif off == R_STROBE:
             self.regs[R_STROBE_N] = self.regs.get(R_STROBE_N, 0) + 1
         elif off == R_TIMER:
             self._t_ready = time.monotonic() + val * 1e-6
@@ -62,6 +206,8 @@ class MemRegs:
             raise IOError("SLVERR")
         if off == R_TIMER:
             return int(time.monotonic() >= self._t_ready)
+        if self.thermal is not None and self.thermal.owns(off):
+            return self.thermal.read(off)
         return self.regs.get(off, 0)
 
 

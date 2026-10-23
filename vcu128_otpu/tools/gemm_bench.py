@@ -1,7 +1,9 @@
 """GEMM on the openTPU matrix unit of the VCU128 over 40G: cycles, GOPS, check.
 
 out[M, N] = A[M, K] @ W[N, K]^T with upstream's ol.dot (block-scaled int8 operands, fp32
-accumulation; A quantized on the fly, W streamed from HBM). Each shape is compiled with
+accumulation; A quantized on the fly, W streamed from HBM). With S slices W is sharded by rows
+(Weight(W, 0): N / S rows per slice, each on its own HBM channels) and the slices' parts of
+out are joined by ol.all_gather (the collective unit; at S = 1 it is out itself). Each shape is compiled with
 upstream's compiler for the board's configuration (device_config of its CFG registers),
 run on the board (BoardBackend over EthTransport), and its output compared with the ISA
 simulator (bit-exact expected) and with float64 numpy (relative error of the quantization).
@@ -26,7 +28,7 @@ from otpu_eth import BOARD_IP, EthTransport
 
 @ol.jit
 def gemm(a, w, out):
-    ol.store(out, ol.dot(ol.load(a), w))
+    ol.store(out, ol.all_gather(ol.dot(ol.load(a), w)))
 
 
 def bench(host, cfg, khz, M, N, K, reps, rng):
@@ -45,10 +47,10 @@ def bench(host, cfg, khz, M, N, K, reps, rng):
             st = be.run(compiled.programs)
             cycles.append(int(st["cycles"]))
         n_img = len(images[0])
-        dram = np.asarray(be.read(0, 0, n_img), np.uint8).copy()
+        drams = [np.asarray(be.read(s, 0, n_img), np.uint8).copy() for s in range(cfg.S)]
     finally:
         be.close()
-    card = collect(compiled, [dram], [None], {}).outputs["out"]
+    card = collect(compiled, drams, [None] * cfg.S, {}).outputs["out"]
 
     ref = A.astype(np.float64) @ W.astype(np.float64).T
     exact = np.array_equal(card.view(np.uint32), isa.view(np.uint32))
@@ -75,7 +77,7 @@ def main():
     b.close()
     cfg = device_config(info)
     khz = info["core_khz"]
-    peak_mac = cfg.D * cfg.MCOLS                     # MACs per cycle of the MXU
+    peak_mac = cfg.S * cfg.D * cfg.MCOLS             # MACs per cycle of the S slices' MXUs
     print(f"board: S={cfg.S} D={cfg.D} MCOLS={cfg.MCOLS} core {khz / 1e3:.1f} MHz, "
           f"peak {2 * peak_mac * khz * 1e3 / 1e9:.1f} GOPS int8 ({peak_mac} MAC/cycle)")
     rng = np.random.default_rng(0)

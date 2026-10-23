@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Внешние зависимости ПК-стороны и регрессий (вне репозитория, рядом с ним):
 #   <ext>/rtl/opentpu-fesens/upstream  openTPU FeSens, коммит f237dab (Apache-2.0)
+#   <ext>/rtl/opentpu-fesens/patched   upstream + env/opentpu-patches/ (с ним работает всё ниже)
 #   <ext>/rtl/opentpu-fesens/.venv     чат, API, компилятор, симулятор ISA, test_otpu_eth.py
 #   <ext>/rtl/opentpu/.venv            cocotb для vcu128_otpu/sim/{hbm,eth40}/run.sh
 # <ext> по умолчанию ../external относительно корня репозитория: этот путь ждут
@@ -29,6 +30,17 @@ fi
 git -C "$up" fetch -q --depth 1 origin "$OPENTPU_SHA"
 git -C "$up" checkout -q "$OPENTPU_SHA"
 echo "openTPU: $(git -C "$up" rev-parse --short HEAD) в $up"
+
+# patched/ = upstream + env/opentpu-patches/ (локальный клон, ветка vcu128; models -> upstream/models):
+# с ним работают чат, API, tools/ и регрессии (PYTHONPATH=.../patched). Повторный запуск собирает заново.
+pd=$ext/rtl/opentpu-fesens/patched
+[ -d "$pd/.git" ] || git clone -q --no-checkout "$up" "$pd"
+git -C "$pd" am --abort >/dev/null 2>&1 || true
+git -C "$pd" checkout -q -f -B vcu128 "$OPENTPU_SHA"
+git -C "$pd" -c user.name=setup -c user.email=setup@localhost am -q "$env_dir"/opentpu-patches/0*.patch
+grep -qx models "$pd/.git/info/exclude" 2>/dev/null || echo models >> "$pd/.git/info/exclude"
+mkdir -p "$up/models"; ln -sfn ../upstream/models "$pd/models"
+echo "openTPU + $(ls "$env_dir"/opentpu-patches/0*.patch | wc -l) патчей: $(git -C "$pd" rev-parse --short HEAD) в $pd"
 
 venv=$ext/rtl/opentpu-fesens/.venv
 [ -x "$venv/bin/python" ] || "$PYTHON" -m venv "$venv"

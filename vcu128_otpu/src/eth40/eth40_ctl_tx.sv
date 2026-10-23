@@ -48,7 +48,8 @@ module eth40_ctl_tx
     peer_t        dst;
     logic [31:0]  seq, off, len, aux;
     logic [7:0]   op, st;
-    logic [15:0]  dlen, csum;
+    logic [15:0]  dlen;
+    logic [19:0]  ssum;                 // сумма заголовка IPv4 до свёртки (C_CS → C_MK)
     logic [17:0]  sbase;
     logic [511:0] hdr;
     logic [31:0]  nres, k;              // k — beat результатов
@@ -107,11 +108,12 @@ module eth40_ctl_tx
             end
             C_CS: begin
                 dlen <= {nres[13:0], 2'b0};
-                csum <= ip_csum(sbase, 16'(20 + 8 + PHDR) + {nres[13:0], 2'b0}, dst.ip);
+                ssum <= 20'(sbase) + 16'(16'(20 + 8 + PHDR) + {nres[13:0], 2'b0})
+                        + dst.ip[31:16] + dst.ip[15:0];
                 cs   <= C_MK;
             end
             C_MK: begin
-                hdr <= resp_hdr(dst, local_mac, local_ip, local_port, csum, dlen,
+                hdr <= resp_hdr(dst, local_mac, local_ip, local_port, ip_csum_fin(ssum), dlen,
                                 seq, op, st, off, len, aux);
                 cs  <= C_H0;
             end

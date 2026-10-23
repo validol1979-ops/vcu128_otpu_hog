@@ -64,7 +64,9 @@ ID токена → embedding из HBM
 
 GQA делит query heads на группы, использующие один KV head. RoPE применяется
 попарно к соседним координатам с позицией `0…max_seq-1`. В KV-cache хранятся
-уже повёрнутые K и исходные V, FP32, отдельно для каждого слоя. Attention
+уже повёрнутые K и исходные V как INT8 с FP32-масштабом на токен и KV-голову
+(как QST ROW в RTL; в массивах хранится деквантованная копия), отдельно для
+каждого слоя. Attention
 читает только позиции до текущей включительно. Embedding/output head связаны
 исходными весами; на HBM учитываются FP32 embedding и INT8 lm_head со шкалами.
 
@@ -101,7 +103,7 @@ slow = otpu.llm_profile(p,c,[128 2048 8192]);
 
 `hidden` и `intermediate` должны быть кратны D=128; head_dim — чётный,
 heads кратно kv_heads. Входная размерность одной MM не больше ACT_BLOCKS*D.
-KV пока только FP32, веса только INT8. `llm_init` проверяет вместимость
+KV — INT8 + масштаб (раскладка и байты: `otpu.kv_bytes`), веса только INT8. `llm_init` проверяет вместимость
 весов и зарезервированного KV в активные `2*S` канала по 2 GiB. Большой
 профиль возвращает `fits_hbm` для каждой длины контекста; точки вне ёмкости
 сохраняются для анализа, но не означают исполнимую конфигурацию.
@@ -221,10 +223,27 @@ backpressure, RMW `otpu_mem_ch`, CDC и протокольных ошибок. �
 Перегенерация из корня репозитория:
 
 ```bash
-PYTHONPATH=../external/rtl/opentpu-fesens/upstream \
+PYTHONPATH=../external/rtl/opentpu-fesens/patched \
 ../external/rtl/opentpu-fesens/.venv/bin/python \
     vcu128_otpu/sim/matlab/export_reference.py
 ```
 
 RTL/Hog/upstream не меняются. Эти проверки дополняют существующие cocotb/
 pytest, не заменяют их; новая FPGA-сборка и проверка на плате не выполнялись.
+
+## Маршруты данных (исправлено 20.10.2026)
+
+События трассы следуют путям upstream `otpu_slice` (подробно — `../../doc/inference.md`):
+MM `q,k,v,o,gate,up,down,lm_head,attn_scores,attn_pv`: HBM → MXU (+ ACT RAM) → TMEM;
+`*_qact`: TMEM → QUANT → ACT; `kv_write`: TMEM → QUANT → HBM (QST);
+`attn_softmax` и прочие векторные: TMEM → VPU → TMEM; `embedding`: HBM → TMEM (LD);
+`logits_store`: TMEM → HBM (ST). Прежняя версия отправляла attention на VPU и писала
+KV как FP32 — это не соответствовало RTL.
+
+## Анимация и QuestaSim
+
+`run_flow(true)` рассчитывает пример и показывает пошаговое движение тензоров.
+`run_flow(false)` сохраняет первый кадр без окна. `build_flow_simulink` создаёт
+Simulink dashboard для воспроизведения событий (требует MATLAB/Simulink; здесь
+не проверен). Общий запуск, HTML-проигрыватель, настоящий RTL-стенд MXU и
+границы моделей — [sim/inference/README.md](../inference/README.md).

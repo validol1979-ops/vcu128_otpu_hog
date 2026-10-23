@@ -1,14 +1,21 @@
 // VCU128 top: openTPU (FeSens) with its memory channels on HBM2 and the host link over
 // 40G Ethernet (QSFP1), plus JTAG-to-AXI to the registers. doc/design.md.
 //
-//   QDR4_CLK_100MHZ -> MMCM: core_clk 100 MHz (otpu_board, registers, dclk, APB), uclk 225 MHz
-//   (otpu_mem_ch controller side, otpu_hbm_port, HBM AXI ports). DDR4_CLK_100MHZ -> HBM_REF_CLK.
+//   QDR4_CLK_100MHZ -> MMCM: core_clk 200 MHz (otpu_board, registers, l_ethernet s_axi),
+//   uclk 225 MHz (otpu_mem_ch controller side, otpu_hbm_port, HBM AXI ports), clk100 100 MHz
+//   (HBM APB, l_ethernet dclk / DRP: the IPs are configured for 100 MHz, USER_APB_PCLK_0 and
+//   GT_DRP_CLK). DDR4_CLK_100MHZ -> HBM_REF_CLK.
 //   QSFP1 -> eth40_qsfp1 (l_ethernet, 40GBASE-R4, tx_clk_out 156.25 MHz = eth_clk) ->
 //   otpu_eth_bridge: DMA (x_*, eth_clk = xclk of otpu_mem_ch) and AXI-Lite (eth_clk; window
 //   0x50000 eth40_regs there, the rest through axil_cdc into core_clk).
 //   core_clk AXI-Lite: vcu128_axil_xbar, masters JTAG and 40G; slaves 0x00000 otpu_board s_ctl,
-//   0x40000 vcu128_platform_regs, 0x60000 l_ethernet s_axi (eth40_mac_init in front).
-//   otpu_bcu_sys (upstream, unchanged): otpu_board + otpu_mem_ch per channel.
+//   0x40000 vcu128_platform_regs (with the thermal monitor), 0x60000 l_ethernet s_axi
+//   (eth40_mac_init in front); s_ctl through vcu128_ctl_guard (thermal hold).
+//   vcu128_sysmon: SYSMONE4 of every SLR, DRP in clk100.
+//   otpu_bcu_sys (upstream + patch 0001: ARD): otpu_board + otpu_mem_ch per channel; each channel's
+//   otpu_hbm_port drives four HBM AXI ports (NS = 2 per controller port, vcu128_hbm). S = 2:
+//   four channels, all 16 ports; placement by SLR in constr/vcu128_floorplan.tcl (slice 0 and the
+//   shell with HBM in SLR0, slice 1 in SLR1).
 //
 // LEDs: 0 core heartbeat, 1 MMCMs locked, 2 HBM calibrated (both stacks), 3 40G rx_status,
 //       4..6 otpu_board led[2:0], 7 HBM AXI error.
@@ -17,7 +24,11 @@
 // its values) and Hog's version parameters.
 
 module otpu_vcu128_top #(
-    // Hog version parameters (hog_tools/templates/top_version_params.v)
+    // Hog version parameters (Hog's top version parameters)
+    // GLOBAL_SHA: the newest commit of every project list (sources, constraints, IP; no Vitis
+    // application here, so software never moves it) -- the board's BUILD_ID. TOP_SHA misses a
+    // constraints-only change (6817049 reported Top's d3cadc3).
+    parameter [31:0] GLOBAL_SHA = 32'h00000000,
     parameter [31:0] TOP_VER    = 32'h00000000,
     parameter [31:0] TOP_SHA    = 32'h00000000,
     parameter [31:0] HOG_VER    = 32'h00000000,
@@ -28,8 +39,8 @@ module otpu_vcu128_top #(
     parameter [31:0] OTHERS_SHA = 32'h00000000,
     parameter [31:0] IPS_VER    = 32'h00000000,
     parameter [31:0] IPS_SHA    = 32'h00000000,
-    // target vcu128 (stage 1)
-    parameter int S          = 1,
+    // target vcu128 (stage 2: two slices)
+    parameter int S          = 2,           // Top/otpu; S = 4: Top/otpu_s4 [generics]
     parameter int D          = 128,
     parameter int MCOLS      = 4,
     parameter int ACT_ROWS   = 4,
@@ -50,11 +61,11 @@ module otpu_vcu128_top #(
     parameter int PQ_WIN     = 1024,
     parameter bit CHASH      = 1'b1,
     parameter bit DSTEP      = 1'b1,
-    parameter int CORE_KHZ   = 100000,
+    parameter int CORE_KHZ   = 200000,
     parameter int DDR_MTS    = 1800,
     parameter bit SEQ_WC     = 1'b0,
     parameter int PLATFORM   = 3,
-    parameter logic [31:0] ARCH_HASH = 32'hff270e6e
+    parameter logic [31:0] ARCH_HASH = 32'hc6166c02  // target/vcu128.toml; S = 4: f83fc219
 )(
     input  wire        QDR4_CLK_100MHZ_P,
     input  wire        QDR4_CLK_100MHZ_N,
@@ -77,31 +88,51 @@ module otpu_vcu128_top #(
 );
 
     localparam int NC = 2 * S;
+    // otpu_bcu_sys SLL: channel j's native port crosses an SLR (two otpu_native_reg, flip-flop to
+    // flip-flop); SLL2 (patch 0004): it crosses two (a third, u_mid, in the SLR between).
+    // constr/vcu128_floorplan.tcl. HBM and every otpu_mem_ch sit in SLR0.
+    //   S = 2: slice 0 in SLR0, slice 1 in SLR1 (its channels 2, 3 cross).
+    //   S = 4 (layout L2): slice 0 in SLR0, slices 1, 2 in SLR1 (channels 2..5 cross), slice 3 in
+    //          SLR2 (channels 6, 7 cross two SLRs). L1 (slices 0, 1 in SLR1, 2, 3 in SLR2; 8'hFF /
+    //          8'hF0) congested SLR1's long lines (build B, 22.10).
+    localparam logic [2*S-1:0] SLL  = (2 * S)'((S == 4) ? 8'hFC : (S == 2) ? 8'h0C : 8'h00);
+    localparam logic [2*S-1:0] SLL2 = (2 * S)'((S == 4) ? 8'hC0 : 8'h00);
+    // HBM per channel: 2 GiB (8 pseudo-channels) at S <= 2, 1 GiB (4, one mini-switch) at S = 4
+    // (eight channels in 8 GB); otpu_board reports it (CFG_DRAM, patch 0004), DRAM_BYTES 2 x that
+    localparam int CH_LOG2 = (S == 4) ? 30 : 31;
+    localparam int PCB     = CH_LOG2 - 28;      // otpu_hbm_port: log2 pseudo-channels a channel
+    // register-slice stages between the 40G bridge and the channels (vcu128_xreg)
+    localparam int XREG = 2;
 
     // ------------------------------------------------------------------ clocks
-    wire clk_in, clk_fb, core_mmcm, uclk_mmcm, core_clk, uclk, locked;
+    wire clk_in, clk_fb, core_mmcm, uclk_mmcm, clk100_mmcm, core_clk, uclk, clk100, locked;
 
     IBUFDS u_ibuf_sys (.I(QDR4_CLK_100MHZ_P), .IB(QDR4_CLK_100MHZ_N), .O(clk_in));
 
-    // VCO 900 MHz: core_clk = 900 / 9 = 100 MHz, uclk = 900 / 4 = 225 MHz
+    // VCO 900 MHz: core_clk = 900 / 4.5 = 200 MHz (CORE_KHZ; CLKOUT0, the only output with a
+    // fractional divider), uclk = 900 / 4 = 225 MHz, clk100 = 900 / 9 = 100 MHz. 900 MHz is the
+    // only VCO in range (800..1600) that is a multiple of both 225 and 100.
     MMCME4_BASE #(
         .CLKIN1_PERIOD    (10.0),
         .DIVCLK_DIVIDE    (1),
         .CLKFBOUT_MULT_F  (9.0),
-        .CLKOUT0_DIVIDE_F (9.0),
-        .CLKOUT1_DIVIDE   (4)
+        .CLKOUT0_DIVIDE_F (4.5),
+        .CLKOUT1_DIVIDE   (4),
+        .CLKOUT2_DIVIDE   (9)
     ) u_mmcm (
         .CLKIN1   (clk_in),
         .CLKFBIN  (clk_fb),
         .CLKFBOUT (clk_fb),
         .CLKOUT0  (core_mmcm),
         .CLKOUT1  (uclk_mmcm),
+        .CLKOUT2  (clk100_mmcm),
         .LOCKED   (locked),
         .RST      (CPU_RESET),
         .PWRDWN   (1'b0)
     );
     BUFG u_bufg_core (.I(core_mmcm), .O(core_clk));
     BUFG u_bufg_u    (.I(uclk_mmcm), .O(uclk));
+    BUFG u_bufg_100  (.I(clk100_mmcm), .O(clk100));
 
     wire hbm_ref;
     IBUFDS u_ibuf_hbm (.I(DDR4_CLK_100MHZ_P), .IB(DDR4_CLK_100MHZ_N), .O(hbm_ref));
@@ -119,9 +150,37 @@ module otpu_vcu128_top #(
         else         u_rst_sync <= {u_rst_sync[2:0], 1'b0};
     wire u_rst_mmcm = u_rst_sync[3];
 
+    (* ASYNC_REG = "TRUE" *) logic [3:0] r100_rst_sync = 4'hF;
+    always_ff @(posedge clk100 or negedge locked)
+        if (!locked) r100_rst_sync <= 4'hF;
+        else         r100_rst_sync <= {r100_rst_sync[2:0], 1'b0};
+    wire rst100 = r100_rst_sync[3];          // HBM APB
+
     // ------------------------------------------------------------------ HBM
-    // Stage 1: channel j's two controller ports on AXI_(2j) and AXI_(2j+1).
-    localparam int NP = 2 * NC;
+    // Channel j: otpu_hbm_port with NS = 2 AXI ports per controller port, its port a = p + 2k
+    // (controller port p, sub-port k) on the IP's AXI_(hp(j, a)) (vcu128_hbm: h_*[i] = AXI_i).
+    // Sub-port k only addresses pseudo-channels of its own mini-switch (no lateral path):
+    //   2 GiB (S <= 2): pseudo-channels 8j .. 8j + 7, sub-port k 8j + 4k .. + 3: AXI 8j + 4k + p;
+    //   1 GiB (S = 4):  pseudo-channels 4j .. 4j + 3 = mini-switch j, all four: AXI 4j + a.
+    // AXI ports no channel uses are tied off below.
+    localparam int HNS = 2;             // otpu_hbm_port NS
+    localparam int HRD = 32;            // otpu_hbm_port RD: read slots per AXI port (64: full
+                                        //   stream at 200 MHz up to 200 uclk, sim/hbm)
+    // otpu_mem_ch read credits per channel (otpu_bcu_sys ARD, patch 0001): upstream's 64 caps the
+    // read stream at 7.7 GB/s at an HBM latency of 100 uclk cycles; 256 holds 12.8 GB/s (200 MHz
+    // core) to 150 cycles with HRD 64, 12.5 at 80 with HRD 32 (sim/hbm test_system_ard)
+    localparam int ARD = 256;
+    localparam int NP  = 32;            // vcu128_hbm's AXI ports
+    function automatic int hp(input int j, input int a);
+        return (PCB == 2) ? 4 * j + a : 8 * j + 4 * (a / 2) + a % 2;
+    endfunction
+    function automatic logic [NP-1:0] hp_used();
+        logic [NP-1:0] u = '0;
+        for (int j = 0; j < NC; j++)
+            for (int a = 0; a < 2 * HNS; a++) u[hp(j, a)] = 1'b1;
+        return u;
+    endfunction
+    localparam logic [NP-1:0] HP_USED = hp_used();
     wire [1:0] hbm_calib;
     wire [1:0] hbm_cattrip;
     wire [6:0] hbm_temp0, hbm_temp1;
@@ -147,79 +206,14 @@ module otpu_vcu128_top #(
 
     // write data parity from otpu_hbm_port (per byte; the IP's parity check is off)
 
-    hbm_0 u_hbm (
-        .HBM_REF_CLK_0       (hbm_ref),
-        .HBM_REF_CLK_1       (hbm_ref),
-        .AXI_00_ACLK         (uclk), .AXI_00_ARESET_N (!u_rst_mmcm),
-        .AXI_00_ARADDR       (h_araddr[0]), .AXI_00_ARBURST (h_arburst[0]), .AXI_00_ARID (h_arid[0]),
-        .AXI_00_ARLEN        (h_arlen[0]),  .AXI_00_ARSIZE  (h_arsize[0]),  .AXI_00_ARVALID (h_arvalid[0]),
-        .AXI_00_ARREADY      (h_arready[0]),
-        .AXI_00_AWADDR       (h_awaddr[0]), .AXI_00_AWBURST (h_awburst[0]), .AXI_00_AWID (h_awid[0]),
-        .AXI_00_AWLEN        (h_awlen[0]),  .AXI_00_AWSIZE  (h_awsize[0]),  .AXI_00_AWVALID (h_awvalid[0]),
-        .AXI_00_AWREADY      (h_awready[0]),
-        .AXI_00_WDATA        (h_wdata[0]),  .AXI_00_WLAST   (h_wlast[0]),   .AXI_00_WSTRB (h_wstrb[0]),
-        .AXI_00_WDATA_PARITY (h_wpar[0]),   .AXI_00_WVALID  (h_wvalid[0]),  .AXI_00_WREADY (h_wready[0]),
-        .AXI_00_RREADY       (h_rready[0]), .AXI_00_RDATA   (h_rdata[0]),   .AXI_00_RDATA_PARITY (),
-        .AXI_00_RID          (h_rid[0]),    .AXI_00_RLAST   (h_rlast[0]),   .AXI_00_RRESP (h_rresp[0]),
-        .AXI_00_RVALID       (h_rvalid[0]),
-        .AXI_00_BREADY       (h_bready[0]), .AXI_00_BID     (h_bid[0]),     .AXI_00_BRESP (h_bresp[0]),
-        .AXI_00_BVALID       (h_bvalid[0]),
-        .AXI_01_ACLK         (uclk), .AXI_01_ARESET_N (!u_rst_mmcm),
-        .AXI_01_ARADDR       (h_araddr[1]), .AXI_01_ARBURST (h_arburst[1]), .AXI_01_ARID (h_arid[1]),
-        .AXI_01_ARLEN        (h_arlen[1]),  .AXI_01_ARSIZE  (h_arsize[1]),  .AXI_01_ARVALID (h_arvalid[1]),
-        .AXI_01_ARREADY      (h_arready[1]),
-        .AXI_01_AWADDR       (h_awaddr[1]), .AXI_01_AWBURST (h_awburst[1]), .AXI_01_AWID (h_awid[1]),
-        .AXI_01_AWLEN        (h_awlen[1]),  .AXI_01_AWSIZE  (h_awsize[1]),  .AXI_01_AWVALID (h_awvalid[1]),
-        .AXI_01_AWREADY      (h_awready[1]),
-        .AXI_01_WDATA        (h_wdata[1]),  .AXI_01_WLAST   (h_wlast[1]),   .AXI_01_WSTRB (h_wstrb[1]),
-        .AXI_01_WDATA_PARITY (h_wpar[1]),   .AXI_01_WVALID  (h_wvalid[1]),  .AXI_01_WREADY (h_wready[1]),
-        .AXI_01_RREADY       (h_rready[1]), .AXI_01_RDATA   (h_rdata[1]),   .AXI_01_RDATA_PARITY (),
-        .AXI_01_RID          (h_rid[1]),    .AXI_01_RLAST   (h_rlast[1]),   .AXI_01_RRESP (h_rresp[1]),
-        .AXI_01_RVALID       (h_rvalid[1]),
-        .AXI_01_BREADY       (h_bready[1]), .AXI_01_BID     (h_bid[1]),     .AXI_01_BRESP (h_bresp[1]),
-        .AXI_01_BVALID       (h_bvalid[1]),
-        .AXI_02_ACLK         (uclk), .AXI_02_ARESET_N (!u_rst_mmcm),
-        .AXI_02_ARADDR       (h_araddr[2]), .AXI_02_ARBURST (h_arburst[2]), .AXI_02_ARID (h_arid[2]),
-        .AXI_02_ARLEN        (h_arlen[2]),  .AXI_02_ARSIZE  (h_arsize[2]),  .AXI_02_ARVALID (h_arvalid[2]),
-        .AXI_02_ARREADY      (h_arready[2]),
-        .AXI_02_AWADDR       (h_awaddr[2]), .AXI_02_AWBURST (h_awburst[2]), .AXI_02_AWID (h_awid[2]),
-        .AXI_02_AWLEN        (h_awlen[2]),  .AXI_02_AWSIZE  (h_awsize[2]),  .AXI_02_AWVALID (h_awvalid[2]),
-        .AXI_02_AWREADY      (h_awready[2]),
-        .AXI_02_WDATA        (h_wdata[2]),  .AXI_02_WLAST   (h_wlast[2]),   .AXI_02_WSTRB (h_wstrb[2]),
-        .AXI_02_WDATA_PARITY (h_wpar[2]),   .AXI_02_WVALID  (h_wvalid[2]),  .AXI_02_WREADY (h_wready[2]),
-        .AXI_02_RREADY       (h_rready[2]), .AXI_02_RDATA   (h_rdata[2]),   .AXI_02_RDATA_PARITY (),
-        .AXI_02_RID          (h_rid[2]),    .AXI_02_RLAST   (h_rlast[2]),   .AXI_02_RRESP (h_rresp[2]),
-        .AXI_02_RVALID       (h_rvalid[2]),
-        .AXI_02_BREADY       (h_bready[2]), .AXI_02_BID     (h_bid[2]),     .AXI_02_BRESP (h_bresp[2]),
-        .AXI_02_BVALID       (h_bvalid[2]),
-        .AXI_03_ACLK         (uclk), .AXI_03_ARESET_N (!u_rst_mmcm),
-        .AXI_03_ARADDR       (h_araddr[3]), .AXI_03_ARBURST (h_arburst[3]), .AXI_03_ARID (h_arid[3]),
-        .AXI_03_ARLEN        (h_arlen[3]),  .AXI_03_ARSIZE  (h_arsize[3]),  .AXI_03_ARVALID (h_arvalid[3]),
-        .AXI_03_ARREADY      (h_arready[3]),
-        .AXI_03_AWADDR       (h_awaddr[3]), .AXI_03_AWBURST (h_awburst[3]), .AXI_03_AWID (h_awid[3]),
-        .AXI_03_AWLEN        (h_awlen[3]),  .AXI_03_AWSIZE  (h_awsize[3]),  .AXI_03_AWVALID (h_awvalid[3]),
-        .AXI_03_AWREADY      (h_awready[3]),
-        .AXI_03_WDATA        (h_wdata[3]),  .AXI_03_WLAST   (h_wlast[3]),   .AXI_03_WSTRB (h_wstrb[3]),
-        .AXI_03_WDATA_PARITY (h_wpar[3]),   .AXI_03_WVALID  (h_wvalid[3]),  .AXI_03_WREADY (h_wready[3]),
-        .AXI_03_RREADY       (h_rready[3]), .AXI_03_RDATA   (h_rdata[3]),   .AXI_03_RDATA_PARITY (),
-        .AXI_03_RID          (h_rid[3]),    .AXI_03_RLAST   (h_rlast[3]),   .AXI_03_RRESP (h_rresp[3]),
-        .AXI_03_RVALID       (h_rvalid[3]),
-        .AXI_03_BREADY       (h_bready[3]), .AXI_03_BID     (h_bid[3]),     .AXI_03_BRESP (h_bresp[3]),
-        .AXI_03_BVALID       (h_bvalid[3]),
-        .APB_0_PCLK          (core_clk), .APB_0_PRESET_N (!core_rst),
-        .APB_0_PWDATA        (32'd0), .APB_0_PADDR (22'd0), .APB_0_PENABLE (1'b0),
-        .APB_0_PSEL          (1'b0),  .APB_0_PWRITE (1'b0),
-        .APB_0_PRDATA        (), .APB_0_PREADY (), .APB_0_PSLVERR (),
-        .APB_1_PCLK          (core_clk), .APB_1_PRESET_N (!core_rst),
-        .APB_1_PWDATA        (32'd0), .APB_1_PADDR (22'd0), .APB_1_PENABLE (1'b0),
-        .APB_1_PSEL          (1'b0),  .APB_1_PWRITE (1'b0),
-        .APB_1_PRDATA        (), .APB_1_PREADY (), .APB_1_PSLVERR (),
-        .apb_complete_0      (hbm_calib[0]),
-        .apb_complete_1      (hbm_calib[1]),
-        .DRAM_0_STAT_CATTRIP (hbm_cattrip[0]),
-        .DRAM_0_STAT_TEMP    (hbm_temp0),
-        .DRAM_1_STAT_CATTRIP (hbm_cattrip[1]),
-        .DRAM_1_STAT_TEMP    (hbm_temp1)
+    vcu128_hbm u_hbm (
+        .hbm_ref (hbm_ref), .aclk (uclk), .aresetn (!u_rst_mmcm), .pclk (clk100), .presetn (!rst100),
+        .h_awaddr, .h_awburst, .h_awid, .h_awlen, .h_awsize, .h_awvalid, .h_awready,
+        .h_wdata, .h_wlast, .h_wstrb, .h_wpar, .h_wvalid, .h_wready,
+        .h_bready, .h_bid, .h_bresp, .h_bvalid,
+        .h_araddr, .h_arburst, .h_arid, .h_arlen, .h_arsize, .h_arvalid, .h_arready,
+        .h_rready, .h_rdata, .h_rid, .h_rlast, .h_rresp, .h_rvalid,
+        .calib (hbm_calib), .cattrip (hbm_cattrip), .temp0 (hbm_temp0), .temp1 (hbm_temp1)
     );
 
     // ------------------------------------------------------------------ 40G
@@ -247,7 +241,7 @@ module otpu_vcu128_top #(
     wire        lm_awvalid, lm_awready, lm_wvalid, lm_wready, lm_bvalid, lm_bready;
     wire        lm_arvalid, lm_arready, lm_rvalid, lm_rready;
 
-    eth40_mgmt u_eth_mgmt (
+    eth40_mgmt #(.CLK_HZ (CORE_KHZ * 1000)) u_eth_mgmt (
         .clk             (core_clk),
         .rst             (core_rst),
         .req_full_reset  (eth_full_reset_req),
@@ -294,21 +288,21 @@ module otpu_vcu128_top #(
         .gt_rxcommadeten_0 (4'b0), .gt_rxslide_in_0 (4'b0), .gt_dmonitorout_0 (),
         .gt_rxlatclk_0 (4'b0), .gt_txlatclk_0 (4'b0), .gt_rxstartofseq_0 (),
         .rxrecclkout_0 (),
-        .gt_common_drpclk (core_clk), .gt_common_drpdo (), .gt_common_drprdy (),
+        .gt_common_drpclk (clk100), .gt_common_drpdo (), .gt_common_drprdy (),
         .gt_common_drpen (1'b0), .gt_common_drpwe (1'b0), .gt_common_drpaddr (10'b0),
         .gt_common_drpdi (16'b0),
-        .gt_ch_drpclk_0 (core_clk), .gt_ch_drpdo_0 (), .gt_ch_drprdy_0 (),
+        .gt_ch_drpclk_0 (clk100), .gt_ch_drpdo_0 (), .gt_ch_drprdy_0 (),
         .gt_ch_drpen_0 (1'b0), .gt_ch_drpwe_0 (1'b0), .gt_ch_drpaddr_0 (10'b0), .gt_ch_drpdi_0 (16'b0),
-        .gt_ch_drpclk_1 (core_clk), .gt_ch_drpdo_1 (), .gt_ch_drprdy_1 (),
+        .gt_ch_drpclk_1 (clk100), .gt_ch_drpdo_1 (), .gt_ch_drprdy_1 (),
         .gt_ch_drpen_1 (1'b0), .gt_ch_drpwe_1 (1'b0), .gt_ch_drpaddr_1 (10'b0), .gt_ch_drpdi_1 (16'b0),
-        .gt_ch_drpclk_2 (core_clk), .gt_ch_drpdo_2 (), .gt_ch_drprdy_2 (),
+        .gt_ch_drpclk_2 (clk100), .gt_ch_drpdo_2 (), .gt_ch_drprdy_2 (),
         .gt_ch_drpen_2 (1'b0), .gt_ch_drpwe_2 (1'b0), .gt_ch_drpaddr_2 (10'b0), .gt_ch_drpdi_2 (16'b0),
-        .gt_ch_drpclk_3 (core_clk), .gt_ch_drpdo_3 (), .gt_ch_drprdy_3 (),
+        .gt_ch_drpclk_3 (clk100), .gt_ch_drpdo_3 (), .gt_ch_drprdy_3 (),
         .gt_ch_drpen_3 (1'b0), .gt_ch_drpwe_3 (1'b0), .gt_ch_drpaddr_3 (10'b0), .gt_ch_drpdi_3 (16'b0),
         .sys_reset (eth_sys_reset),
         .gtwiz_reset_tx_datapath_0 (eth_sys_reset),
         .gtwiz_reset_rx_datapath_0 (eth_sys_reset || eth_rx_dp_reset),
-        .dclk (core_clk),
+        .dclk (clk100),
         .tx_clk_out_0 (eth_clk), .rx_clk_out_0 (), .rx_core_clk_0 (eth_clk),
         .gtpowergood_out_0 (gt_powergood),
         .s_axi_aclk_0 (core_clk), .s_axi_aresetn_0 (!core_rst), .pm_tick_0 (1'b0),
@@ -342,6 +336,8 @@ module otpu_vcu128_top #(
     wire [16:0] bridge_ev;
     wire [31:0] bridge_status;
 
+    // x_*: otpu_bcu_sys's DMA slaves (otpu_mem_ch xclk sides); xb_*: the bridge's masters;
+    // vcu128_xreg between them (register slices, eth_clk)
     logic [NC-1:0]        x_awvalid, x_awready, x_wvalid, x_wready, x_wlast, x_bvalid, x_bready;
     logic [NC-1:0]        x_arvalid, x_arready, x_rvalid, x_rready, x_rlast;
     logic [NC-1:0][30:0]  x_awaddr, x_araddr;
@@ -349,6 +345,13 @@ module otpu_vcu128_top #(
     logic [NC-1:0][127:0] x_wdata, x_rdata;
     logic [NC-1:0][15:0]  x_wstrb;
     logic [NC-1:0][1:0]   x_bresp, x_rresp;
+    logic [NC-1:0]        xb_awvalid, xb_awready, xb_wvalid, xb_wready, xb_wlast, xb_bvalid, xb_bready;
+    logic [NC-1:0]        xb_arvalid, xb_arready, xb_rvalid, xb_rready, xb_rlast;
+    logic [NC-1:0][30:0]  xb_awaddr, xb_araddr;
+    logic [NC-1:0][7:0]   xb_awlen, xb_arlen;
+    logic [NC-1:0][127:0] xb_wdata, xb_rdata;
+    logic [NC-1:0][15:0]  xb_wstrb;
+    logic [NC-1:0][1:0]   xb_bresp, xb_rresp;
 
     // eth_clk AXI-Lite from the bridge
     wire [19:0] e_awaddr, e_araddr;
@@ -365,9 +368,12 @@ module otpu_vcu128_top #(
         .rx_tlast (rx_tlast), .rx_tuser (rx_tuser),
         .tx_tdata (tx_tdata), .tx_tkeep (tx_tkeep), .tx_tvalid (tx_tvalid),
         .tx_tlast (tx_tlast), .tx_tuser (tx_tuser), .tx_tready (tx_tready),
-        .x_awvalid, .x_awready, .x_awaddr, .x_awlen, .x_wvalid, .x_wready, .x_wdata, .x_wstrb,
-        .x_wlast, .x_bvalid, .x_bready, .x_bresp, .x_arvalid, .x_arready, .x_araddr, .x_arlen,
-        .x_rvalid, .x_rready, .x_rdata, .x_rresp, .x_rlast,
+        .x_awvalid (xb_awvalid), .x_awready (xb_awready), .x_awaddr (xb_awaddr),
+        .x_awlen (xb_awlen), .x_wvalid (xb_wvalid), .x_wready (xb_wready), .x_wdata (xb_wdata),
+        .x_wstrb (xb_wstrb), .x_wlast (xb_wlast), .x_bvalid (xb_bvalid), .x_bready (xb_bready),
+        .x_bresp (xb_bresp), .x_arvalid (xb_arvalid), .x_arready (xb_arready),
+        .x_araddr (xb_araddr), .x_arlen (xb_arlen), .x_rvalid (xb_rvalid), .x_rready (xb_rready),
+        .x_rdata (xb_rdata), .x_rresp (xb_rresp), .x_rlast (xb_rlast),
         .m_axil_awaddr (e_awaddr), .m_axil_awvalid (e_awvalid), .m_axil_awready (e_awready),
         .m_axil_wdata (e_wdata), .m_axil_wstrb (e_wstrb), .m_axil_wvalid (e_wvalid),
         .m_axil_wready (e_wready), .m_axil_bresp (e_bresp), .m_axil_bvalid (e_bvalid),
@@ -375,6 +381,25 @@ module otpu_vcu128_top #(
         .m_axil_arready (e_arready), .m_axil_rdata (e_rdata), .m_axil_rresp (e_rresp),
         .m_axil_rvalid (e_rvalid), .m_axil_rready (e_rready),
         .ev (bridge_ev), .status (bridge_status)
+    );
+
+    // The DMA masters through two register-slice stages into otpu_bcu_sys (S = 2: the channels'
+    // otpu_mem_ch sit along HBM, from AXI port 00 to 19; the 312.5 MHz eth_clk paths did not
+    // close with the bridge on them directly, 88f6cb5)
+    vcu128_xreg #(.NC (NC), .STAGES (XREG)) u_xreg (
+        .clk (eth_clk), .rst (eth_rst),
+        .s_awvalid (xb_awvalid), .s_awready (xb_awready), .s_awaddr (xb_awaddr), .s_awlen (xb_awlen),
+        .s_wvalid (xb_wvalid), .s_wready (xb_wready), .s_wdata (xb_wdata), .s_wstrb (xb_wstrb),
+        .s_wlast (xb_wlast), .s_bvalid (xb_bvalid), .s_bready (xb_bready), .s_bresp (xb_bresp),
+        .s_arvalid (xb_arvalid), .s_arready (xb_arready), .s_araddr (xb_araddr), .s_arlen (xb_arlen),
+        .s_rvalid (xb_rvalid), .s_rready (xb_rready), .s_rdata (xb_rdata), .s_rresp (xb_rresp),
+        .s_rlast (xb_rlast),
+        .m_awvalid (x_awvalid), .m_awready (x_awready), .m_awaddr (x_awaddr), .m_awlen (x_awlen),
+        .m_wvalid (x_wvalid), .m_wready (x_wready), .m_wdata (x_wdata), .m_wstrb (x_wstrb),
+        .m_wlast (x_wlast), .m_bvalid (x_bvalid), .m_bready (x_bready), .m_bresp (x_bresp),
+        .m_arvalid (x_arvalid), .m_arready (x_arready), .m_araddr (x_araddr), .m_arlen (x_arlen),
+        .m_rvalid (x_rvalid), .m_rready (x_rready), .m_rdata (x_rdata), .m_rresp (x_rresp),
+        .m_rlast (x_rlast)
     );
 
     // Window 0x50000 -> eth40_regs (eth_clk); the bridge keeps one transaction in flight
@@ -391,10 +416,13 @@ module otpu_vcu128_top #(
     wire        c_awready, c_wready, c_bvalid, c_arready, c_rvalid;
 
     // link status into eth_clk for eth40_regs
+    // (link_s3: a plain stage after the synchronizer, placed with eth40_regs, away from the GTs)
     (* ASYNC_REG = "TRUE" *) logic [31:0] link_s1, link_s2;
+    logic [31:0] link_s3;
     always_ff @(posedge eth_clk) begin
         link_s1 <= {22'd0, eth_hi_ber, eth_aligned, gt_powergood, eth_block_lock};
         link_s2 <= link_s1;
+        link_s3 <= link_s2;
     end
 
     eth40_regs #(.NEV(17), .PARAMS(32'(NC))) u_eth_regs (
@@ -405,7 +433,7 @@ module otpu_vcu128_top #(
         .s_araddr (e_araddr[7:0]), .s_arvalid (e_arvalid && r_loc), .s_arready (er_arready),
         .s_rdata (er_rdata), .s_rresp (er_rresp), .s_rvalid (er_rvalid), .s_rready (e_rready),
         .local_mac (local_mac), .local_ip (local_ip), .local_port (local_port),
-        .link_stat (link_s2), .bridge_stat (bridge_status), .ev (bridge_ev)
+        .link_stat (link_s3), .bridge_stat (bridge_status), .ev (bridge_ev)
     );
 
     wire [19:0] k_awaddr, k_araddr;
@@ -519,6 +547,18 @@ module otpu_vcu128_top #(
         .m_rdata (y_rdata), .m_rresp (y_rresp), .m_rvalid (y_rvalid), .m_rready (y_rready)
     );
 
+    // die temperature and supplies of every SLR (thermal/vcu128_sysmon, DRP in clk100)
+    logic [2:0][3:0][15:0] sm_snap;
+    logic [2:0]            sm_valid, sm_err, sm_ot;
+    logic                  sm_tog;
+    vcu128_sysmon #(.NSLR (3), .DCLK_KHZ (100000)) u_sysmon (
+        .clk (clk100), .rst (rst100), .snap (sm_snap), .snap_valid (sm_valid),
+        .snap_err (sm_err), .snap_tog (sm_tog), .ot (sm_ot)
+    );
+    wire        th_hold, th_abort;
+    wire [11:0] th_temp_code;
+    wire [15:0] th_n_abort;
+
     // slave 1: platform registers
     wire [7:0] hbm_err;
     vcu128_platform_regs u_plat (
@@ -540,7 +580,10 @@ module otpu_vcu128_top #(
         .eth_full_reset (eth_full_reset_req), .eth_rx_reset (eth_rx_reset_req),
         .eth_auto_recover (eth_auto_recover), .gt_rxlpmen (gt_rxlpmen),
         .gt_txdiffctrl (gt_txdiffctrl), .gt_txprecursor (gt_txprecursor),
-        .gt_txpostcursor (gt_txpostcursor), .gt_txmaincursor (gt_txmaincursor)
+        .gt_txpostcursor (gt_txpostcursor), .gt_txmaincursor (gt_txmaincursor),
+        .sm_snap (sm_snap), .sm_valid (sm_valid), .sm_err (sm_err), .sm_tog (sm_tog),
+        .sm_ot (sm_ot), .th_n_abort_s (th_n_abort),
+        .th_hold (th_hold), .th_abort (th_abort), .th_temp_code (th_temp_code)
     );
 
     // slave 2: l_ethernet registers, configuration writes after each 40G reset
@@ -552,7 +595,7 @@ module otpu_vcu128_top #(
         .INIT_N    (3),
         .INIT_ADDR ({16'h0018, 16'h0014, 16'h000C}),
         .INIT_DATA ({32'h2580_0040, 32'h0000_0033, 32'h0000_3003}),
-        .DELAY     (10000)
+        .DELAY     (CORE_KHZ / 10)    // 100 us
     ) u_mac_init (
         .clk (core_clk), .rst (core_rst), .start (mac_init_start), .busy (), .done (),
         .s_awaddr (y_awaddr[2][15:0]), .s_awvalid (y_awvalid[2]), .s_awready (y_awready[2]),
@@ -568,6 +611,28 @@ module otpu_vcu128_top #(
     );
 
     // ------------------------------------------------------------------ accelerator
+    // slave 0 through vcu128_ctl_guard: the thermal hold's CTRL = 0 (doc/design.md
+    // "Температура и контроль"); while th_hold the calibration input is low (no RUN, no LOAD)
+    logic [19:0] g_awaddr, g_araddr;
+    logic [31:0] g_wdata, g_rdata;
+    logic [3:0]  g_wstrb;
+    logic [1:0]  g_bresp, g_rresp;
+    logic        g_awvalid, g_awready, g_wvalid, g_wready, g_bvalid, g_bready;
+    logic        g_arvalid, g_arready, g_rvalid, g_rready;
+    vcu128_ctl_guard u_ctl_guard (
+        .clk (core_clk), .rst (core_rst), .stop (th_abort), .n_abort (th_n_abort),
+        .s_awaddr (y_awaddr[0]), .s_awvalid (y_awvalid[0]), .s_awready (y_awready[0]),
+        .s_wdata (y_wdata[0]), .s_wstrb (y_wstrb[0]), .s_wvalid (y_wvalid[0]), .s_wready (y_wready[0]),
+        .s_bresp (y_bresp[0]), .s_bvalid (y_bvalid[0]), .s_bready (y_bready[0]),
+        .s_araddr (y_araddr[0]), .s_arvalid (y_arvalid[0]), .s_arready (y_arready[0]),
+        .s_rdata (y_rdata[0]), .s_rresp (y_rresp[0]), .s_rvalid (y_rvalid[0]), .s_rready (y_rready[0]),
+        .m_awaddr (g_awaddr), .m_awvalid (g_awvalid), .m_awready (g_awready),
+        .m_wdata (g_wdata), .m_wstrb (g_wstrb), .m_wvalid (g_wvalid), .m_wready (g_wready),
+        .m_bresp (g_bresp), .m_bvalid (g_bvalid), .m_bready (g_bready),
+        .m_araddr (g_araddr), .m_arvalid (g_arvalid), .m_arready (g_arready),
+        .m_rdata (g_rdata), .m_rresp (g_rresp), .m_rvalid (g_rvalid), .m_rready (g_rready)
+    );
+
     wire [2:0] board_led;
     logic [NC-1:0][1:0]        c_cmd_valid, c_cmd_ready, c_cmd_we;
     logic [NC-1:0][1:0][24:0]  c_cmd_addr;
@@ -583,20 +648,21 @@ module otpu_vcu128_top #(
         .LANES (LANES), .WIN (WIN), .RPB (RPB), .WPB (WPB), .TMEM_IMPL (TMEM_IMPL),
         .MXU_IMPL (MXU_IMPL), .MXU_CL (MXU_CL), .VPU_CL (VPU_CL), .ULANES (ULANES),
         .TRACE_DEPTH (TRACE_DEPTH), .PQ_WIN (PQ_WIN), .CHASH (CHASH), .DSTEP (DSTEP),
-        .CORE_KHZ (CORE_KHZ), .BUILD_ID (TOP_SHA), .DDR_MTS (DDR_MTS), .SEQ_WC (SEQ_WC),
-        .PLATFORM (PLATFORM), .ARCH_HASH (ARCH_HASH), .SLL (4'b0000)
+        .CORE_KHZ (CORE_KHZ), .BUILD_ID (GLOBAL_SHA), .DDR_MTS (DDR_MTS), .SEQ_WC (SEQ_WC),
+        .PLATFORM (PLATFORM), .ARCH_HASH (ARCH_HASH), .SLL (SLL), .SLL2 (SLL2), .CH_LOG2 (CH_LOG2),
+        .ARD (ARD)
     ) u_sys (
         .clk (core_clk), .clk_f (core_clk), .rst (core_rst), .ctl_mrst (core_rst),
         .xclk (eth_clk), .xrst (eth_rst),
-        .calib ({NC{&hbm_calib}}), .ded ('0), .temp (12'd0),
+        .calib ({NC{&hbm_calib && !th_hold}}), .ded ('0), .temp (th_temp_code),
         .led (board_led), .i2c_lo (), .i2c_pin (5'h1F),
-        .s_ctl_awaddr (y_awaddr[0][11:0]), .s_ctl_awvalid (y_awvalid[0]), .s_ctl_awready (y_awready[0]),
-        .s_ctl_wdata (y_wdata[0]), .s_ctl_wstrb (y_wstrb[0]), .s_ctl_wvalid (y_wvalid[0]),
-        .s_ctl_wready (y_wready[0]), .s_ctl_bresp (y_bresp[0]), .s_ctl_bvalid (y_bvalid[0]),
-        .s_ctl_bready (y_bready[0]),
-        .s_ctl_araddr (y_araddr[0][11:0]), .s_ctl_arvalid (y_arvalid[0]), .s_ctl_arready (y_arready[0]),
-        .s_ctl_rdata (y_rdata[0]), .s_ctl_rresp (y_rresp[0]), .s_ctl_rvalid (y_rvalid[0]),
-        .s_ctl_rready (y_rready[0]),
+        .s_ctl_awaddr (g_awaddr[11:0]), .s_ctl_awvalid (g_awvalid), .s_ctl_awready (g_awready),
+        .s_ctl_wdata (g_wdata), .s_ctl_wstrb (g_wstrb), .s_ctl_wvalid (g_wvalid),
+        .s_ctl_wready (g_wready), .s_ctl_bresp (g_bresp), .s_ctl_bvalid (g_bvalid),
+        .s_ctl_bready (g_bready),
+        .s_ctl_araddr (g_araddr[11:0]), .s_ctl_arvalid (g_arvalid), .s_ctl_arready (g_arready),
+        .s_ctl_rdata (g_rdata), .s_ctl_rresp (g_rresp), .s_ctl_rvalid (g_rvalid),
+        .s_ctl_rready (g_rready),
         .x_awvalid, .x_awready, .x_awaddr, .x_awlen, .x_wvalid, .x_wready, .x_wdata, .x_wstrb,
         .x_wlast, .x_bvalid, .x_bready, .x_bresp, .x_arvalid, .x_arready, .x_araddr, .x_arlen,
         .x_rvalid, .x_rready, .x_rdata, .x_rresp, .x_rlast,
@@ -606,36 +672,71 @@ module otpu_vcu128_top #(
         .c_rdata_valid, .c_rdata_data
     );
 
-    // HBM adapters: channel j, ports 2j / 2j + 1, CH_BASE j x 2 GiB
+    // HBM adapters: channel j at CH_BASE j x 2^CH_LOG2, its ports a on AXI_(hp(j, a))
     for (genvar j = 0; j < NC; j++) begin : g_hbm
         logic err, perr;
-        otpu_hbm_port #(.CH_BASE(33'(j) << 31)) u_port (
+        logic [3:0][32:0]  awaddr, araddr;
+        logic [3:0][5:0]   awid, arid, bid, rid;
+        logic [3:0][3:0]   awlen, arlen;
+        logic [3:0][2:0]   awsize, arsize;
+        logic [3:0][1:0]   awburst, arburst, bresp, rresp;
+        logic [3:0]        awvalid, awready, wvalid, wready, wlast, bvalid, bready;
+        logic [3:0]        arvalid, arready, rvalid, rready, rlast;
+        logic [3:0][255:0] wdata, rdata;
+        logic [3:0][31:0]  wstrb, wpar;
+        otpu_hbm_port #(.CH_BASE(33'(j) << CH_LOG2), .PCB(PCB), .NS(HNS), .RD(HRD)) u_port (
             .uclk (uclk), .urst (u_rst),
             .c_cmd_valid (c_cmd_valid[j]), .c_cmd_ready (c_cmd_ready[j]), .c_cmd_we (c_cmd_we[j]),
             .c_cmd_addr (c_cmd_addr[j]),
             .c_wdata_valid (c_wdata_valid[j]), .c_wdata_ready (c_wdata_ready[j]),
             .c_wdata_data (c_wdata_data[j]), .c_wdata_we (c_wdata_we[j]),
             .c_rdata_valid (c_rdata_valid[j]), .c_rdata_data (c_rdata_data[j]),
-            .m_awaddr (h_awaddr[2*j +: 2]), .m_awid (h_awid[2*j +: 2]), .m_awlen (h_awlen[2*j +: 2]),
-            .m_awsize (h_awsize[2*j +: 2]), .m_awburst (h_awburst[2*j +: 2]),
-            .m_awvalid (h_awvalid[2*j +: 2]), .m_awready (h_awready[2*j +: 2]),
-            .m_wdata (h_wdata[2*j +: 2]), .m_wstrb (h_wstrb[2*j +: 2]), .m_wlast (h_wlast[2*j +: 2]),
-            .m_wvalid (h_wvalid[2*j +: 2]), .m_wready (h_wready[2*j +: 2]),
-            .m_wid (), .m_wdata_parity (h_wpar[2*j +: 2]),
-            .m_bid (h_bid[2*j +: 2]), .m_bresp (h_bresp[2*j +: 2]), .m_bvalid (h_bvalid[2*j +: 2]),
-            .m_bready (h_bready[2*j +: 2]),
-            .m_araddr (h_araddr[2*j +: 2]), .m_arid (h_arid[2*j +: 2]), .m_arlen (h_arlen[2*j +: 2]),
-            .m_arsize (h_arsize[2*j +: 2]), .m_arburst (h_arburst[2*j +: 2]),
-            .m_arvalid (h_arvalid[2*j +: 2]), .m_arready (h_arready[2*j +: 2]),
-            .m_rid (h_rid[2*j +: 2]), .m_rdata (h_rdata[2*j +: 2]), .m_rresp (h_rresp[2*j +: 2]),
-            .m_rlast (h_rlast[2*j +: 2]), .m_rvalid (h_rvalid[2*j +: 2]), .m_rready (h_rready[2*j +: 2]),
+            .m_awaddr (awaddr), .m_awid (awid), .m_awlen (awlen), .m_awsize (awsize),
+            .m_awburst (awburst), .m_awvalid (awvalid), .m_awready (awready),
+            .m_wdata (wdata), .m_wstrb (wstrb), .m_wlast (wlast), .m_wvalid (wvalid),
+            .m_wready (wready), .m_wid (), .m_wdata_parity (wpar),
+            .m_bid (bid), .m_bresp (bresp), .m_bvalid (bvalid), .m_bready (bready),
+            .m_araddr (araddr), .m_arid (arid), .m_arlen (arlen), .m_arsize (arsize),
+            .m_arburst (arburst), .m_arvalid (arvalid), .m_arready (arready),
+            .m_rid (rid), .m_rdata (rdata), .m_rresp (rresp), .m_rlast (rlast),
+            .m_rvalid (rvalid), .m_rready (rready),
             .st_rcmd (), .st_wcmd (), .st_rout (), .st_wout (), .st_dep (), .st_busy (),
             .st_err_cnt (), .st_err (err), .st_perr (perr)
         );
+        for (genvar a = 0; a < 4; a++) begin : g_ax
+            localparam int H = hp(j, a);
+            assign h_awaddr[H] = awaddr[a];   assign h_awid[H] = awid[a];
+            assign h_awlen[H] = awlen[a];     assign h_awsize[H] = awsize[a];
+            assign h_awburst[H] = awburst[a]; assign h_awvalid[H] = awvalid[a];
+            assign awready[a] = h_awready[H];
+            assign h_wdata[H] = wdata[a];     assign h_wstrb[H] = wstrb[a];
+            assign h_wlast[H] = wlast[a];     assign h_wvalid[H] = wvalid[a];
+            assign h_wpar[H] = wpar[a];       assign wready[a] = h_wready[H];
+            assign bid[a] = h_bid[H];         assign bresp[a] = h_bresp[H];
+            assign bvalid[a] = h_bvalid[H];   assign h_bready[H] = bready[a];
+            assign h_araddr[H] = araddr[a];   assign h_arid[H] = arid[a];
+            assign h_arlen[H] = arlen[a];     assign h_arsize[H] = arsize[a];
+            assign h_arburst[H] = arburst[a]; assign h_arvalid[H] = arvalid[a];
+            assign arready[a] = h_arready[H];
+            assign rid[a] = h_rid[H];         assign rdata[a] = h_rdata[H];
+            assign rresp[a] = h_rresp[H];     assign rlast[a] = h_rlast[H];
+            assign rvalid[a] = h_rvalid[H];   assign h_rready[H] = rready[a];
+        end
         assign hbm_err[j] = err || perr;
     end
     for (genvar j = NC; j < 8; j++) begin : g_noerr
         assign hbm_err[j] = 1'b0;
+    end
+    for (genvar p = 0; p < NP; p++) begin : g_hbm_off
+      if (!HP_USED[p]) begin : g_off
+        assign h_awaddr[p] = '0;  assign h_awid[p] = '0;   assign h_awlen[p] = '0;
+        assign h_awsize[p] = '0;  assign h_awburst[p] = '0; assign h_awvalid[p] = 1'b0;
+        assign h_wdata[p] = '0;   assign h_wstrb[p] = '0;   assign h_wlast[p] = 1'b0;
+        assign h_wvalid[p] = 1'b0; assign h_wpar[p] = '0;   assign h_bready[p] = 1'b1;
+        assign h_araddr[p] = '0;  assign h_arid[p] = '0;   assign h_arlen[p] = '0;
+        assign h_arsize[p] = '0;  assign h_arburst[p] = '0; assign h_arvalid[p] = 1'b0;
+        assign h_rready[p] = 1'b1;
+      end
     end
 
     // ------------------------------------------------------------------ board I/O

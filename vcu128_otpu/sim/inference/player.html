@@ -1,0 +1,27 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>openTPU — движение данных LLM</title>
+<style>body{font:16px system-ui;background:#eef3f8;color:#17324d;max-width:1200px;margin:28px auto;padding:0 20px}h1{font-size:28px}button,select{font:inherit;padding:8px;border:1px solid #9bb2c7;border-radius:6px;background:white}input{width:100%}svg{background:white;border-radius:16px;width:100%;height:auto}rect{fill:#e9f1fa;stroke:#396484;stroke-width:2}.active rect{fill:#ffda85;stroke:#d77b12}text{fill:#17324d;font:17px system-ui}.edge{stroke:#dd661c;stroke-width:5;fill:none;marker-end:url(#arrow)}#info{background:white;padding:18px;border-radius:12px;min-height:90px}small{display:block;color:#4f657b;margin:12px 0}.stats{display:flex;gap:24px;flex-wrap:wrap}</style>
+<h1>openTPU · путь данных одного токена</h1>
+<p>Численная модель LLaMA-подобного декодера: RMSNorm → Q/K/V → RoPE → attention → O → MLP → logits.</p>
+<small>Случайные веса. Время оценочное. Показаны логические потоки тензоров, не AXI-транзакции RTL. Проекции и attention (q·Kᵀ, P·V) — MM INT8 на MXU; KV-cache INT8 + FP32-масштаб на токен (QST). Потактовая картина настоящего RTL — Lens, <code>../lens/README.md</code>.</small>
+<p><button id="prev">← Шаг</button> <button id="play">▶ Воспроизвести</button> <button id="next">Шаг →</button> <select id="token" aria-label="Позиция токена"></select> <select id="speed" aria-label="Скорость"><option value="450">Обычная скорость</option><option value="100">Быстро</option><option value="1200">Медленно</option></select></p>
+<input id="cursor" type="range" min="0" value="0" aria-label="Событие симуляции">
+<svg viewBox="0 0 1120 500" role="img" aria-label="HBM, TMEM, QUANT, ACT, MXU, VPU"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#dd661c"/></marker></defs><g id="edges"></g><g id="nodes"></g><text x="50" y="482">QACT: TMEM → QUANT → ACT; QST: TMEM → QUANT → HBM; MM: ACT + веса/KV из HBM → MXU → TMEM</text></svg>
+<div id="info" aria-live="polite"></div>
+<small>Каждый шаг соответствует строке llm_trace.csv. На MM дополнительно показана подача активаций из ACT RAM. Передачи в HBM — логический учёт, без CDC, адресов и отдельных beat.</small>
+<script>
+const events=/*EVENT_DATA*/[], names=/*NODE_NAMES*/[];
+const xy=[[45,80],[430,80],[430,260],[815,260],[815,80],[430,370]],ns='http://www.w3.org/2000/svg';
+let idx=0,timer=null;
+const $=id=>document.getElementById(id);
+function el(tag,attrs,parent){let e=document.createElementNS(ns,tag);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,v);parent.appendChild(e);return e}
+xy.forEach(([x,y],i)=>{let g=el('g',{id:'node'+i},$('nodes'));el('rect',{x,y,width:255,height:65,rx:10},g);let t=el('text',{x:x+127,y:y+39,'text-anchor':'middle'},g);t.textContent=names[i]});
+function edge(a,b){let[x,y]=xy[a],[u,v]=xy[b];x+=127;y+=32;u+=127;v+=32;let dx=u-x,dy=v-y,len=Math.hypot(dx,dy),trim= Math.abs(dx)>Math.abs(dy)?140:45;el('path',{d:`M${x+dx/len*trim},${y+dy/len*trim} L${u-dx/len*trim},${v-dy/len*trim}`,class:'edge'},$('edges'))}
+function draw(){if(!events.length){$('info').textContent='Сначала запустите prepare.py';return}const e=events[idx];$('cursor').value=idx;$('token').value=e.token;$('edges').replaceChildren();xy.forEach((_,i)=>$('node'+i).setAttribute('class',e.route.includes(i)?'active':''));for(let j=1;j<e.route.length;j++)edge(e.route[j-1],e.route[j]);if(e.route.includes(4)){edge(3,4);$('node3').setAttribute('class','active')}
+$('info').replaceChildren();let title=document.createElement('b');title.textContent=`Событие ${idx+1}/${events.length} · позиция ${e.token} · слой ${e.layer||'общий'} · ${e.op}`;$('info').appendChild(title);let p=document.createElement('p');p.className='stats';p.textContent=`HBM чтение: ${e.read_bytes.toLocaleString()} B | запись: ${e.write_bytes.toLocaleString()} B | ${(e.start_s*1e6).toFixed(3)}–${(e.finish_s*1e6).toFixed(3)} мкс`;$('info').appendChild(p);let d=document.createElement('div');d.textContent=`Оценка HBM ${(e.memory_s*1e6).toFixed(3)} мкс; вычисления ${(e.compute_s*1e6).toFixed(3)} мкс. Длительность = max(HBM, вычисления).`;$('info').appendChild(d)}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='▶ Воспроизвести'}
+$('cursor').max=Math.max(0,events.length-1);$('cursor').oninput=e=>{stop();idx=Number(e.target.value);draw()};
+for(const t of [...new Set(events.map(e=>e.token))]){let o=document.createElement('option');o.value=t;o.textContent='Позиция '+t;$('token').appendChild(o)}
+$('token').onchange=e=>{stop();idx=events.findIndex(x=>x.token===Number(e.target.value));draw()};
+$('prev').onclick=()=>{stop();idx=Math.max(0,idx-1);draw()};$('next').onclick=()=>{stop();idx=Math.min(events.length-1,idx+1);draw()};
+$('play').onclick=()=>{if(timer){stop();return}if(idx===events.length-1)idx=0;$('play').textContent='Ⅱ Пауза';timer=setInterval(()=>{if(idx>=events.length-1){stop();return}idx++;draw()},Number($('speed').value))};$('speed').onchange=()=>{if(timer){stop();$('play').click()}};draw();
+</script></html>

@@ -4,7 +4,7 @@ function r = llm_profile(p,c,contexts)
 h=p.hidden; f=p.intermediate; kv=p.kv_heads*(h/p.heads);
 assert(mod(h,p.heads)==0 && mod(p.heads,p.kv_heads)==0);
 assert(mod(h,c.D)==0 && mod(f,c.D)==0 && all(contexts>=1 & contexts==fix(contexts)));
-assert(max(h,f)<=c.D*c.ACT_BLOCKS && p.kv_bytes==4);
+assert(max(h,f)<=c.D*c.ACT_BLOCKS);
 dims=[h h;kv h;kv h;h h;f h;f h;h f];
 names={'q','k','v','o','gate','up','down'};
 weight=@(n,k)64*ceil(n*(k+4+k/c.D)/64);
@@ -23,16 +23,21 @@ for j=1:numel(contexts)
         vec('attn_rms',4*h,6*h);
         for i=1:3, fc(dims(i,1),dims(i,2),names{i}); end
         vec('rope',0,6*(h+kv));
-        s=otpu.llm_event(s,c,l,'kv_write',0,2*kv*p.kv_bytes,0,0);
-        ops=4*t*h+5*p.heads*t;
-        s=otpu.llm_event(s,c,l,'attention_kv_read',2*t*kv*p.kv_bytes,0,ops,ops/(c.S*c.LANES*c.core_hz));
+        kvb=otpu.kv_bytes(p,c,t); dh=h/p.heads; G=p.heads/p.kv_heads;
+        s=otpu.llm_event(s,c,l,'kv_write',0,kvb.k_write+kvb.v_write,0,0);
+        s=otpu.llm_event(s,c,l,'attn_q_qact',0,0,3*h,(3*h)/(c.LANES*c.core_hz));
+        s=otpu.llm_event(s,c,l,'attn_scores',kvb.k_read,0,2*p.heads*t*dh,p.kv_heads*t*ceil(dh/c.D)/c.core_hz);
+        ops=5*p.heads*t; s=otpu.llm_event(s,c,l,'attn_softmax',0,0,ops,ops/(c.LANES*c.core_hz));
+        s=otpu.llm_event(s,c,l,'attn_p_qact',0,0,3*G*t*p.kv_heads,3*p.heads*t/(c.LANES*c.core_hz));
+        s=otpu.llm_event(s,c,l,'attn_pv',kvb.v_read,0,2*p.heads*t*dh,p.kv_heads*dh*ceil(t/c.D)/c.core_hz);
         fc(h,h,'o'); vec('attn_residual',0,h); vec('ffn_rms',4*h,6*h);
         fc(f,h,'gate'); fc(f,h,'up'); vec('swiglu',0,6*f);
         fc(h,f,'down'); vec('ffn_residual',0,h);
     end
     l=0; vec('final_rms',4*h,6*h); fc(p.vocab,h,'lm_head');
+    s=otpu.llm_event(s,c,0,'logits_store',0,4*p.vocab,0,0);
     r.seconds(j)=s.time_s; r.read_bytes(j)=sum([s.trace.read_bytes]);
-    r.write_bytes(j)=sum([s.trace.write_bytes]); r.kv_bytes(j)=2*t*kv*p.kv_bytes*p.layers;
+    r.write_bytes(j)=sum([s.trace.write_bytes]); kvb=otpu.kv_bytes(p,c,t); r.kv_bytes(j)=kvb.used(t);
     r.traces{j}=s.trace;
 end
 r.tokens_per_s=1./r.seconds;

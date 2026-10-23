@@ -1,5 +1,5 @@
 # VCU128 Rev1.0 (xcvu37p-fsvh2892-2L-e): openTPU, HBM2, 40G Ethernet on QSFP1.
-# Pins from the VCU128 master XDC (Sources and documents/vcu128/helper/vcu128_Rev1.0_.xdc)
+# Pins from the VCU128 master XDC (<docs>/vcu128/helper/vcu128_Rev1.0_.xdc)
 # and UG1302. Clock-domain crossings: constr/vcu128_cdc.tcl (late, implementation only).
 
 # Fabric clocks: QDR4_CLK_100MHZ (U96, SiT9120 100 MHz), bank 69 -> MMCM (core_clk, uclk)

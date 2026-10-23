@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: validol1979-ops <225744605+validol1979-ops@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 12:37:20 +0300
+Subject: [PATCH 8/8] fit_embed: int8 embedding table where an fp32 one takes
+ over half a slice's DRAM (chat, serve)
+
+qwen35.EMBED_F32_MAX (2 GiB, half a 4 GiB card) kept Qwen3.5-2B's 1.9 GiB fp32 table, and at S > 1
+every slice holds it: at S = 4 with 2 GiB a slice the image was 2263 MiB (cap 2048). After the
+configuration is known (make_backend), chat and serve take Spec.embed int8 when 4 * vocab * hidden >
+cfg.DRAM_BYTES / 2: 823 MiB a slice (cap 2048), 983 MiB (cap 32768). S = 2 (4 GiB a slice) unchanged.
+tests/test_fit_embed.py. VCU128 S = 4 (07B2A8C): Qwen3.5-2B 66.3 tok/s, 16 tokens = ISA bit for bit.
+
+diff --git a/opentpu/host/chat.py b/opentpu/host/chat.py
+index 23cd71ae..4e60ac96 100644
+--- a/opentpu/host/chat.py
++++ b/opentpu/host/chat.py
+@@ -1135,6 +1135,8 @@ def main(argv=None):
+                                     head_format=a.head_format)
+     except ConfigMismatch as e:
+         raise SystemExit(f"otpu-chat: {e}") from None
++    from opentpu.llm import fit_embed
++    spec = fit_embed(spec, cfg)     # (an fp32 embedding table over half a slice's DRAM: int8)
+     if a.mtp and (not hasattr(spec, "mtp") or a.per_position):
+         raise SystemExit("otpu-chat: --mtp takes a Qwen3.5 model and resident decode")
+     if cfg is None and not streams and not a.mtp and not _maps_on_design(spec):
+diff --git a/opentpu/llm/__init__.py b/opentpu/llm/__init__.py
+index c08e9445..01c8fc98 100644
+--- a/opentpu/llm/__init__.py
++++ b/opentpu/llm/__init__.py
+@@ -56,3 +56,17 @@ def load_spec(path):
+         raise ValueError(f"{path}: model type {t!r} is not supported (qwen3, lfm2, qwen3_5 and "
+                          f"their MoE variants, gemma4, minicpmv4_7, {', '.join(MODEL_TYPES)})")
+     return Spec.from_hf(path)
++
++
++def fit_embed(spec, cfg):
++    """spec with its embedding rows int8 (Spec.embed) where an fp32 table would take over half of a
++    slice's DRAM (cfg.DRAM_BYTES; at S > 1 every slice holds the table): Qwen3.5-2B's fp32 table is
++    1.9 GiB, under qwen35.EMBED_F32_MAX (half a 4 GiB card) but most of a 2 GiB slice (VCU128 at
++    S = 4). A spec without an fp32 table, or no configuration yet (cfg None), is returned as is."""
++    from dataclasses import replace
++    if cfg is None or getattr(spec, "embed", None) != "f32":
++        return spec
++    if 4 * spec.vocab * spec.hidden > cfg.DRAM_BYTES // 2:
++        return replace(spec, embed="int8")
++    return spec
++
+diff --git a/opentpu/serve/api.py b/opentpu/serve/api.py
+index ef7e068e..03ce2c28 100644
+--- a/opentpu/serve/api.py
++++ b/opentpu/serve/api.py
+@@ -795,6 +795,8 @@ def load(a):
+                                        wformat=wformat, head_format=a.head_format)
+     except ConfigMismatch as e:
+         raise SystemExit(f"otpu-serve: {e}") from None
++    from ..llm import fit_embed
++    spec = fit_embed(spec, cfg)     # (an fp32 embedding table over half a slice's DRAM: int8)
+     if cfg is None and not streams and not CH._maps_on_design(spec):
+         from ..host.board import sim_config
+         from ..isasim import board_config
+diff --git a/tests/test_fit_embed.py b/tests/test_fit_embed.py
+new file mode 100644
+index 00000000..4d4488f0
+--- /dev/null
++++ b/tests/test_fit_embed.py
+@@ -0,0 +1,26 @@
++"""fit_embed: an fp32 embedding table over half a slice's DRAM becomes int8 (Qwen3.5-2B at S = 4)."""
++from dataclasses import dataclass, replace
++
++from opentpu.isasim import Config
++from opentpu.llm import fit_embed
++
++
++@dataclass(frozen=True)
++class _Spec:                    # the fields fit_embed reads (qwen3 / qwen35 / lfm2 Spec have them)
++    hidden: int = 2048          # Qwen3.5-2B
++    vocab: int = 248320
++    embed: str = "f32"
++
++
++def _spec(embed="f32"):
++    return _Spec(embed=embed)
++
++
++def test_fp32_table_over_half_a_slice_goes_int8():
++    s = _spec()                                       # 4 x 248320 x 2048 = 1.9 GiB
++    assert fit_embed(s, Config(S=4, DRAM_BYTES=2 << 30)).embed == "int8"
++    assert fit_embed(s, Config(S=2, DRAM_BYTES=4 << 30)) is s       # under half of 4 GiB: as is
++    assert fit_embed(s, None) is s
++    i8 = _spec("int8")
++    assert fit_embed(i8, Config(S=4, DRAM_BYTES=2 << 30)) is i8
++    assert fit_embed(replace(s, vocab=1000), Config(S=4, DRAM_BYTES=2 << 30)).embed == "f32"

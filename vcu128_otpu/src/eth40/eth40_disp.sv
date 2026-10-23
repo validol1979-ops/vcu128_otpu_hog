@@ -95,6 +95,20 @@ module eth40_disp
                    rx_kport == q.src.port;
     wire [3:0] nb_c = 4'((end_c[31:0] - 32'd1) >> 12) - 4'(q.off >> 12) + 4'd1;
 
+    // проверки -- из триггеров (тайминг 40G: q.len -> w_ok -> wd_valid -> WE очереди u_aq
+    // в eth40_wr было 9 уровней логики, −0,09 нс при 312,5 МГц): q меняется только при
+    // переходе S_H1 -> S_DEC, поэтому S_DEC решает со второго такта (dec_go), когда
+    // *_q уже посчитаны по новому q
+    logic       w_ok_q, r_ok_q, g_ok_q, dec_go;
+    logic [3:0] nb_q;
+    always_ff @(posedge clk) begin
+        w_ok_q <= w_ok;
+        r_ok_q <= r_ok;
+        g_ok_q <= g_ok;
+        nb_q   <= nb_c;
+        dec_go <= st == S_DEC;
+    end
+
     // редуктор W: beat 256 бит, младшая половина первой
     logic [255:0] wb;
     logic         wb_v, wb_h, wb_l0, wb_l1;
@@ -144,14 +158,14 @@ module eth40_disp
     assign wd_ch    = q.ch;
     assign wd_off   = q.off[30:0];
     assign wd_len   = q.len;
-    assign wd_nb    = nb_c;
+    assign wd_nb    = nb_q;
 
     always_comb begin
         wd_valid = 1'b0;
         rd_valid = 1'b0;
-        if (st == S_DEC) begin
-            if (q.op == OP_WRITE && w_ok) wd_valid = aq_ready;
-            if (q.op == OP_READ && r_ok)  rd_valid = 1'b1;
+        if (st == S_DEC && dec_go) begin
+            if (q.op == OP_WRITE && w_ok_q) wd_valid = aq_ready;
+            if (q.op == OP_READ && r_ok_q)  rd_valid = 1'b1;
         end
     end
     assign er_valid = st == S_ERR;
@@ -182,11 +196,11 @@ module eth40_disp
                 q  <= parse_req({s_tdata, h0});
                 st <= S_DEC;
             end
-            S_DEC: begin
+            S_DEC: if (dec_go) begin
                 bad_idx <= '0;
                 case (q.op)
                     OP_WRITE:
-                        if (!w_ok) st <= S_ERR;
+                        if (!w_ok_q) st <= S_ERR;
                         else if (wd_valid && wd_ready) begin
                             ev_write <= 1'b1;
                             la       <= q.off[30:4];
@@ -194,10 +208,10 @@ module eth40_disp
                             st       <= S_WDATA;
                         end
                     OP_READ:
-                        if (!r_ok) st <= S_ERR;
+                        if (!r_ok_q) st <= S_ERR;
                         else if (rd_ready) begin ev_read <= 1'b1; st <= S_DRAIN; end
                     OP_REG:
-                        if (!g_ok) st <= S_ERR;
+                        if (!g_ok_q) st <= S_ERR;
                         else if (k_hit) begin
                             // повтор: ответ ещё отправляется или выполняется — его и дождётся ПК
                             if (!rx_busy) begin rx_replay <= 1'b1; ev_dup <= 1'b1; end
