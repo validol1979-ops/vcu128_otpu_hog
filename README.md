@@ -22,6 +22,7 @@ Apache-2.0) на отладочной плате AMD VCU128 (Virtex UltraScale+ 
 |---|---|---|---|
 | Qwen3.5-2B, веса fp4, голова int8 | 9,6 ток/с | 36,0 ток/с | **66,3 ток/с** (prefill 152 ток/с) |
 | Qwen3.5-4B, веса fp4, голова int8 | 4,6 ток/с | 17,6 ток/с | **33,1 ток/с** (prefill 69 ток/с) |
+| Qwen3.5-9B, веса fp4, голова int8 | — | — | **17,8 ток/с** (prefill 18,6 ток/с) |
 | Gemma-4-E4B, веса и голова fp4 | 3,0 ток/с (int8 / fp4) | — | **28,7 ток/с** (prefill 56 ток/с) |
 | GEMM INT8 2048×2048, M = 1 (поток весов) | — | 84 GOPS (42 ГБ/с) | **143 GOPS (71 ГБ/с)** |
 | GEMM INT8 2048×2048, M = 16 (у 1 слайса — большие M) | 94 GOPS | 237 GOPS | 338 GOPS |
@@ -32,6 +33,7 @@ Apache-2.0) на отладочной плате AMD VCU128 (Virtex UltraScale+ 
 | Модель | `otpu` (2 слайса) | `otpu_s4` (4 слайса) |
 |---|---|---|
 | Qwen3.5-2B, Qwen3.5-4B | да (на плате) | да (на плате) |
+| Qwen3.5-9B | раскладывается (на плате не запускалась) | да (на плате, контекст 32k) |
 | LFM2.5-230M | раскладывается, на этих сборках не запускалась | то же |
 | Gemma 4 (E4B) | раскладывается (на плате не запускалась) | да (на плате; PLE на ПК) |
 | MoE (LFM2.5-8B-A1B, Qwen3.5-35B-A3B), MTP | нет | нет — в upstream только один слайс |
@@ -129,6 +131,7 @@ RTL: `vcu128_otpu/sim/hbm/run.sh`, `vcu128_otpu/sim/eth40/run.sh` (NC = 2, 4, 8)
     cd ../external/rtl/opentpu-fesens/upstream
     ../.venv/bin/hf download Qwen/Qwen3.5-2B      --local-dir models/Qwen3.5-2B
     ../.venv/bin/hf download Qwen/Qwen3.5-4B      --local-dir models/Qwen3.5-4B
+    ../.venv/bin/hf download Qwen/Qwen3.5-9B      --local-dir models/Qwen3.5-9B
 
 ## Запуск модели на плате
 
@@ -137,7 +140,7 @@ RTL: `vcu128_otpu/sim/hbm/run.sh`, `vcu128_otpu/sim/eth40/run.sh` (NC = 2, 4, 8)
 vcu128_otpu/tools/host/install.sh` — sysctl буферов сокетов и юнит systemd, которые
 восстанавливают это после перезагрузки, см. `vcu128_otpu/doc/eth40_protocol.md`),
 окружение и модель (раздел выше).
-Проще всего — `vcu128_otpu/tools/chat_board.sh 2b|4b|gemma` (контекст 32k `CAP=...`, ответ до конца
+Проще всего — `vcu128_otpu/tools/chat_board.sh 2b|4b|9b|gemma` (контекст 32k `CAP=...`, ответ до конца
 контекста `MAXNEW=...`). Вручную:
 
     cd <repo>/../external/rtl/opentpu-fesens/patched
@@ -159,7 +162,7 @@ vcu128_otpu/tools/host/install.sh` — sysctl буферов сокетов и �
     OTPU_API_KEY=<ключ> vcu128_otpu/tools/serve_board.sh 4b --max-running 1   # API OpenAI на 0.0.0.0:8000
     python3 vcu128_otpu/tools/webchat/webchat.py                              # страница чата на :8001
 
-`serve_board.sh [2b|4b|gemma|lfm2]` — сервер upstream `opentpu.serve.api` (API в стиле OpenAI) с моделью на
+`serve_board.sh [2b|4b|9b|gemma|lfm2]` — сервер upstream `opentpu.serve.api` (API в стиле OpenAI) с моделью на
 плате, ключ обязателен (`Authorization: Bearer <ключ>`). `webchat.py` (стандартная библиотека Python) —
 страница чата для браузера на `http://<адрес ПК>:8001/`: ключ подставляет сама, ответ потоком, позиция в
 очереди и счётчик токенов, панель «О системе» (модель, плата, слайсы, частота, прошивка). Пакетная обработка

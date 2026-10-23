@@ -5,7 +5,7 @@
 # Before a kill of a hung server every thread's stack goes to its log (SIGUSR1, faulthandler);
 # the restart cuts the card's run short (OTPU_STOP_RUN=1).
 #
-#   OTPU_API_KEY=<key> vcu128_otpu/tools/serve_watchdog.sh [2b|4b|gemma|lfm2] [serve options]
+#   OTPU_API_KEY=<key> vcu128_otpu/tools/serve_watchdog.sh [2b|4b|9b|gemma|lfm2] [serve options]
 #   LOG=<file> STALL=180 POLL=15 ...                (default log: tmp/serve_board.log, appended)
 set -uo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

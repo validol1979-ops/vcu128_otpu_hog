@@ -2,7 +2,7 @@
 # The model on the VCU128 as an OpenAI-style API server for the local network (upstream opentpu.serve.api
 # over 40G: otpu_eth_run.py), e.g. for any OpenAI client or a web UI on another machine.
 #
-#   vcu128_otpu/tools/serve_board.sh [2b|4b|gemma|lfm2] [extra opentpu.serve.api options]
+#   vcu128_otpu/tools/serve_board.sh [2b|4b|9b|gemma|lfm2] [extra opentpu.serve.api options]
 #   HOST=0.0.0.0 PORT=8000 CAP=32768 OTPU_API_KEY=<key> vcu128_otpu/tools/serve_board.sh 4b
 #
 # Listens on HOST (default every interface) : PORT (8000). OTPU_API_KEY is required unless HOST is
@@ -25,9 +25,10 @@ which="${1:-4b}"; shift || true
 case "$which" in
   2b)    args=(--model qwen35-2b --wformat fp4 --head-format int8) ;;
   4b)    args=(--model qwen35-4b --wformat fp4 --head-format int8) ;;
+  9b)    args=(--model "$up/patched/models/Qwen3.5-9B" --wformat fp4 --head-format int8) ;;   # (no alias upstream)
   gemma) args=(--model gemma4-e4b --wformat fp4 --head-format fp4) ;;
   lfm2)  args=(--model lfm2) ;;
-  *)     echo "model: 2b | 4b | gemma | lfm2" >&2; exit 2 ;;
+  *)     echo "model: 2b | 4b | 9b | gemma | lfm2" >&2; exit 2 ;;
 esac
 echo "serving $which on http://$host:$port/v1 (LAN: http://$(ip -4 -br addr show eno2 2>/dev/null | awk '{print $3}' | cut -d/ -f1):$port/v1)"
 exec "$up/.venv/bin/python" "$here/otpu_eth_run.py" -m opentpu.serve.api "${args[@]}" --backend board \
